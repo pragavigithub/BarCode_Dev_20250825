@@ -677,7 +677,7 @@ def post_to_sap(transfer_id):
                 "Quantity": group_data['quantity'],
                 "WarehouseCode": transfer.to_warehouse,
                 "FromWarehouseCode": transfer.from_warehouse,
-                "UoMCode": "EA",
+                "UoMCode": "",
                 "SerialNumbers": group_data['serials']
             })
             line_num += 1
