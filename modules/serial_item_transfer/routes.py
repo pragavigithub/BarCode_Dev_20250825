@@ -338,3 +338,103 @@ def revalidate_item(item_id):
     except Exception as e:
         logging.error(f"Error revalidating serial item: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@serial_item_bp.route('/<int:transfer_id>/approve', methods=['POST'])
+@login_required
+def approve_transfer(transfer_id):
+    """Approve Serial Item Transfer for QC"""
+    try:
+        transfer = SerialItemTransfer.query.get_or_404(transfer_id)
+        
+        # Check QC permissions
+        if not current_user.has_permission('qc_dashboard') and current_user.role not in ['admin', 'manager']:
+            flash('Access denied - QC permissions required', 'error')
+            return redirect(url_for('qc_dashboard'))
+        
+        if transfer.status != 'submitted':
+            flash('Only submitted transfers can be approved', 'error')
+            return redirect(url_for('qc_dashboard'))
+        
+        # Get QC notes
+        qc_notes = request.form.get('qc_notes', '').strip()
+        
+        # Update transfer status
+        transfer.status = 'qc_approved'
+        transfer.qc_approver_id = current_user.id
+        transfer.qc_approved_at = datetime.utcnow()
+        transfer.qc_notes = qc_notes
+        transfer.updated_at = datetime.utcnow()
+        
+        # Update all items to approved status
+        for item in transfer.items:
+            item.qc_status = 'approved'
+            item.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        logging.info(f"✅ Serial Item Transfer {transfer_id} approved by {current_user.username}")
+        flash(f'Serial Item Transfer {transfer.transfer_number} approved successfully!', 'success')
+        
+        # Try to post to SAP B1 (optional - based on your business process)
+        try:
+            sap = SAPIntegration()
+            if sap.ensure_logged_in():
+                # Add SAP posting logic here if needed
+                logging.info(f"📤 Serial Item Transfer {transfer_id} ready for SAP posting")
+        except Exception as e:
+            logging.warning(f"SAP posting preparation failed: {str(e)}")
+        
+        return redirect(url_for('qc_dashboard'))
+        
+    except Exception as e:
+        logging.error(f"Error approving serial item transfer: {str(e)}")
+        db.session.rollback()
+        flash('Error approving transfer', 'error')
+        return redirect(url_for('qc_dashboard'))
+
+@serial_item_bp.route('/<int:transfer_id>/reject', methods=['POST'])
+@login_required
+def reject_transfer(transfer_id):
+    """Reject Serial Item Transfer for QC"""
+    try:
+        transfer = SerialItemTransfer.query.get_or_404(transfer_id)
+        
+        # Check QC permissions
+        if not current_user.has_permission('qc_dashboard') and current_user.role not in ['admin', 'manager']:
+            flash('Access denied - QC permissions required', 'error')
+            return redirect(url_for('qc_dashboard'))
+        
+        if transfer.status != 'submitted':
+            flash('Only submitted transfers can be rejected', 'error')
+            return redirect(url_for('qc_dashboard'))
+        
+        # Get rejection reason (required)
+        qc_notes = request.form.get('qc_notes', '').strip()
+        if not qc_notes:
+            flash('Rejection reason is required', 'error')
+            return redirect(url_for('qc_dashboard'))
+        
+        # Update transfer status
+        transfer.status = 'rejected'
+        transfer.qc_approver_id = current_user.id
+        transfer.qc_approved_at = datetime.utcnow()
+        transfer.qc_notes = qc_notes
+        transfer.updated_at = datetime.utcnow()
+        
+        # Update all items to rejected status
+        for item in transfer.items:
+            item.qc_status = 'rejected'
+            item.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        logging.info(f"❌ Serial Item Transfer {transfer_id} rejected by {current_user.username}: {qc_notes}")
+        flash(f'Serial Item Transfer {transfer.transfer_number} rejected', 'warning')
+        
+        return redirect(url_for('qc_dashboard'))
+        
+    except Exception as e:
+        logging.error(f"Error rejecting serial item transfer: {str(e)}")
+        db.session.rollback()
+        flash('Error rejecting transfer', 'error')
+        return redirect(url_for('qc_dashboard'))
