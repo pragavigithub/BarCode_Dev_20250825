@@ -2841,7 +2841,7 @@ class SAPIntegration:
             transfer_data = {
                 "DocDate": serial_transfer_document.created_at.strftime('%Y-%m-%d'),
                 "DueDate": serial_transfer_document.created_at.strftime('%Y-%m-%d'),
-                "CardCode": None,
+                "CardCode": "",
                 "CardName": "",
                 "Address": "",
                 "Comments": serial_transfer_document.notes or "Serial Number Transfer from WMS",

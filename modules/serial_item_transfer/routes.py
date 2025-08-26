@@ -602,7 +602,7 @@ def post_to_sap(transfer_id):
         sap_transfer_data = {
             "DocDate": datetime.now().strftime('%Y-%m-%d'),
             "DueDate": datetime.now().strftime('%Y-%m-%d'),
-            "CardCode": "None",
+            "CardCode": "",
             "CardName": "",
             "Address": "",
             "Comments": "Serial Number Item Transfer from WMS",
