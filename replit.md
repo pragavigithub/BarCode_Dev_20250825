@@ -96,6 +96,11 @@ A Flask-based warehouse management system with SAP integration for barcode scann
 - **Fixed SAP Integration**: Resolved method call errors by implementing direct SAP B1 API integration for stock transfer posting
 - **Tab Key Navigation**: Enhanced serial number entry with tab key functionality for line-by-line input
 - **Migration Complete**: Successfully migrated project from Replit Agent to standard Replit environment with PostgreSQL support
+- **2025-08-26**: Fixed Serial Item Transfer SAP B1 Integration
+- **Fixed Date Format Issue**: Resolved SAP B1 API error where ExpiryDate was being sent as string "None" instead of null values
+- **Updated SAP Posting Logic**: Changed all date fields (ExpiryDate, ManufactureDate, ReceptionDate, WarrantyStart, WarrantyEnd) to use null instead of string "None"
+- **Enhanced Error Handling**: Fixed SerialNumbers array formatting to prevent 400 errors when posting to SAP B1 StockTransfers endpoint
+- **Validated Fix**: Serial Item Transfer module now properly posts to SAP B1 with correct date format expectations
 
 ## User Preferences
 - None specified yet

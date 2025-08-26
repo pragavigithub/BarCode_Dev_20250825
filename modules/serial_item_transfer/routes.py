@@ -631,13 +631,13 @@ def post_to_sap(transfer_id):
                     "SystemSerialNumber": 0,
                     "InternalSerialNumber": item.serial_number,
                     "ManufacturerSerialNumber": item.serial_number,
-                    "ExpiryDate": "None",
-                    "ManufactureDate": "None",
-                    "ReceptionDate": "None",
-                    "WarrantyStart": "None",
-                    "WarrantyEnd": "None",
-                    "Location": "None",
-                    "Notes": "None"
+                    "ExpiryDate": None,
+                    "ManufactureDate": None,
+                    "ReceptionDate": None,
+                    "WarrantyStart": None,
+                    "WarrantyEnd": None,
+                    "Location": None,
+                    "Notes": None
                 })
                 item_groups[item.item_code]['quantity'] += 1
         
