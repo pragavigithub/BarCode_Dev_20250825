@@ -467,36 +467,16 @@
             error: function(xhr) {
                 const response = xhr.responseJSON;
 
-                // Check if item was added despite validation failure
-                if (response && response.item_added && response.item_data) {
-                    // Show error feedback but add to table
-                    feedbackArea.html(`
-                        <small class="text-danger">
-                            <i class="fas fa-times"></i> ${response.error}
-                        </small>
-                    `);
+                     // Invalid serial numbers are now rejected and not added to database
+            // Show error feedback and allow user to correct the input
+            feedbackArea.html(`
+                <small class="text-danger">
+                    <i class="fas fa-times"></i> ${response ? response.error : 'Invalid serial number - not added to transfer'}
+                </small>
+            `);
 
-                    // Mark input as invalid
-                    inputElement.removeClass('is-valid').addClass('is-invalid').prop('disabled', true);
-
-                    // Add failed validation row to table
-                    addRowToTable(response.item_data);
-
-                    // Update summary counters
-                    updateSummaryCounters();
-
-                    // Move to next line
-                    addNewLineIfNeeded(lineNumber + 1);
-                    focusLine(lineNumber + 1);
-                } else {
-                    // Regular error handling
-                    feedbackArea.html(`
-                        <small class="text-danger">
-                            <i class="fas fa-times"></i> ${response ? response.error : 'Validation error'}
-                        </small>
-                    `);
-                    inputElement.removeClass('is-valid').addClass('is-invalid').prop('disabled', false);
-                }
+            // Clear input and allow correction
+            inputElement.removeClass('is-valid').addClass('is-invalid').prop('disabled', false).val('').focus();
             }
         });
     }
