@@ -128,7 +128,7 @@ def detail(transfer_id):
 @serial_item_bp.route('/<int:transfer_id>/add_serial_item', methods=['POST'])
 @login_required
 def add_serial_item(transfer_id):
-    """Add serial item to Serial Item Transfer with SAP B1 validation"""
+    """Add serial item to Serial Item Transfer with real-time SAP B1 validation"""
     
     try:
         transfer = SerialItemTransfer.query.get_or_404(transfer_id)
@@ -155,7 +155,8 @@ def add_serial_item(transfer_id):
         if existing_item:
             return jsonify({
                 'success': False, 
-                'error': f'Serial number {serial_number} already exists in this transfer'
+                'error': f'Serial number {serial_number} already exists in this transfer',
+                'duplicate': True
             }), 400
         
         # Validate serial number with SAP B1
@@ -164,6 +165,7 @@ def add_serial_item(transfer_id):
         
         logging.info(f"🔍 SAP B1 validation result for {serial_number}: {validation_result}")
         
+        # Always create line item immediately - even for failed validation
         if not validation_result.get('valid'):
             # Create item with failed validation status
             transfer_item = SerialItemTransferItem(
@@ -181,11 +183,24 @@ def add_serial_item(transfer_id):
             db.session.add(transfer_item)
             db.session.commit()
             
+            # Return item details for live table update
             return jsonify({
                 'success': False,
                 'error': validation_result.get('error', 'Serial number validation failed'),
                 'item_added': True,
-                'validation_status': 'failed'
+                'validation_status': 'failed',
+                'item_data': {
+                    'id': transfer_item.id,
+                    'serial_number': transfer_item.serial_number,
+                    'item_code': transfer_item.item_code,
+                    'item_description': transfer_item.item_description,
+                    'from_warehouse_code': transfer_item.from_warehouse_code,
+                    'to_warehouse_code': transfer_item.to_warehouse_code,
+                    'validation_status': transfer_item.validation_status,
+                    'validation_error': transfer_item.validation_error,
+                    'quantity': transfer_item.quantity,
+                    'line_number': len(transfer.items)
+                }
             }), 400
         
         # Create transfer item with validated data
@@ -207,12 +222,24 @@ def add_serial_item(transfer_id):
         
         logging.info(f"✅ Serial item {serial_number} added to transfer {transfer_id}")
         
+        # Return complete item data for live table update
         return jsonify({
             'success': True,
             'message': f'Serial number {serial_number} added successfully',
-            'item_code': validation_result.get('item_code'),
-            'item_description': validation_result.get('item_description'),
-            'warehouse_code': validation_result.get('warehouse_code')
+            'item_added': True,
+            'validation_status': 'validated',
+            'item_data': {
+                'id': transfer_item.id,
+                'serial_number': transfer_item.serial_number,
+                'item_code': transfer_item.item_code,
+                'item_description': transfer_item.item_description,
+                'from_warehouse_code': transfer_item.from_warehouse_code,
+                'to_warehouse_code': transfer_item.to_warehouse_code,
+                'validation_status': transfer_item.validation_status,
+                'validation_error': transfer_item.validation_error,
+                'quantity': transfer_item.quantity,
+                'line_number': len(transfer.items)
+            }
         })
         
     except Exception as e:
@@ -687,7 +714,7 @@ def post_to_sap(transfer_id):
             }
         
         if sap_result.get('success'):
-            # Update transfer status
+            # Update transfer status and SAP document info
             transfer.status = 'posted'
             transfer.sap_document_number = sap_result.get('document_number')
             transfer.updated_at = datetime.utcnow()
@@ -698,12 +725,18 @@ def post_to_sap(transfer_id):
             return jsonify({
                 'success': True,
                 'message': f'Transfer posted to SAP B1 successfully. Document Number: {sap_result.get("document_number")}',
-                'sap_document_number': sap_result.get('document_number')
+                'sap_document_number': sap_result.get('document_number'),
+                'doc_entry': sap_result.get('doc_entry'),
+                'status': 'posted'
             })
         else:
+            # Keep document in QC approved status for retry
+            logging.error(f"SAP B1 posting failed for transfer {transfer_id}: {sap_result.get('error')}")
             return jsonify({
                 'success': False,
-                'error': f'SAP B1 posting failed: {sap_result.get("error", "Unknown error")}'
+                'error': f'SAP B1 posting failed: {sap_result.get("error", "Unknown error")}',
+                'retry_available': True,
+                'status': transfer.status  # Keep current status
             }), 500
         
     except Exception as e:

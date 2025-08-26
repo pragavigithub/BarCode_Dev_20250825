@@ -395,6 +395,96 @@
     </div>
 </div>
 
+<!-- QC Approved Serial Item Transfers for SAP Posting -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i data-feather="cloud-upload"></i> 
+                        QC Approved Serial Item Transfers - Ready for SAP Posting
+                    </h5>
+                    <div>
+                        <button class="btn btn-outline-secondary btn-sm" onclick="refreshData()">
+                            <i data-feather="refresh-cw"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                {# Use the separate QC approved transfers passed from the route #}
+                {% if qc_approved_serial_item_transfers %}
+                <div class="table-responsive">
+                    <table class="table table-hover table-striped">
+                        <thead class="table-success">
+                            <tr>
+                                <th>Transfer Number</th>
+                                <th>From → To Warehouse</th>
+                                <th>QC Approved By</th>
+                                <th>Items Count</th>
+                                <th>SAP Status</th>
+                                <th>QC Notes</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for transfer in qc_approved_serial_item_transfers %}
+                            <tr>
+                                <td><strong>{{ transfer.transfer_number }}</strong></td>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <span class="badge bg-primary">{{ transfer.from_warehouse or 'N/A' }}</span>
+                                        <i data-feather="arrow-right" class="mx-2" style="width: 16px; height: 16px;"></i>
+                                        <span class="badge bg-success">{{ transfer.to_warehouse or 'N/A' }}</span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div>
+                                        <strong>{{ transfer.qc_approver.first_name if transfer.qc_approver else 'N/A' }} {{ transfer.qc_approver.last_name if transfer.qc_approver else '' }}</strong><br>
+                                        <small class="text-muted">{{ transfer.qc_approved_at.strftime('%Y-%m-%d %H:%M') if transfer.qc_approved_at else 'N/A' }}</small>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="badge bg-info">{{ transfer.items|length }} items</span>
+                                </td>
+                                <td>
+                                    {% if transfer.sap_document_number %}
+                                        <span class="badge bg-success">Posted: {{ transfer.sap_document_number }}</span>
+                                    {% else %}
+                                        <span class="badge bg-warning">Pending SAP Posting</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <small>{{ transfer.qc_notes[:50] + '...' if transfer.qc_notes and transfer.qc_notes|length > 50 else (transfer.qc_notes or 'No notes') }}</small>
+                                </td>
+                                <td>
+                                    {% if not transfer.sap_document_number %}
+                                        <button class="btn btn-sm btn-success" onclick="postSerialItemTransferToSAP({{ transfer.id }}, '{{ transfer.transfer_number }}')">
+                                            <i data-feather="cloud-upload"></i> Post to SAP B1
+                                        </button>
+                                    {% else %}
+                                        <span class="text-success">
+                                            <i data-feather="check-circle"></i> Posted
+                                        </span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-info">
+                    <i data-feather="info"></i>
+                    No QC approved serial item transfers ready for SAP posting at this time.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Approval Modal -->
 <div class="modal fade" id="approvalModal" tabindex="-1">
     <div class="modal-dialog">
@@ -457,6 +547,19 @@
 </div>
 {% endblock %}
 
+{% block extra_css %}
+<style>
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+</style>
+{% endblock %}
+
 {% block scripts %}
 <script>
 function showApprovalModal(grpoId, poNumber) {
@@ -471,6 +574,137 @@ function showRejectionModal(grpoId, poNumber) {
     document.getElementById('rejectionForm').action = `/grpo/${grpoId}/reject`;
     const modal = new bootstrap.Modal(document.getElementById('rejectionModal'));
     modal.show();
+}
+
+// Serial Item Transfer Approval Functions
+function showSerialItemTransferApprovalModal(transferId, transferNumber) {
+    // Reuse the existing approval modal but update the form action and text
+    document.getElementById('approvalPONumber').textContent = transferNumber;
+    document.getElementById('approvalForm').action = `/serial_item_transfer/${transferId}/qc_approve`;
+    
+    // Update modal title for Serial Item Transfer
+    document.querySelector('#approvalModal .modal-title').textContent = 'Approve Serial Item Transfer';
+    
+    // Update alert text
+    const alertDiv = document.querySelector('#approvalModal .alert');
+    alertDiv.innerHTML = `
+        <i data-feather="check-circle"></i>
+        Are you sure you want to approve Serial Item Transfer <strong>${transferNumber}</strong>?
+    `;
+    
+    // Re-initialize feather icons in the modal
+    feather.replace();
+    
+    const modal = new bootstrap.Modal(document.getElementById('approvalModal'));
+    modal.show();
+}
+
+function showSerialItemTransferRejectionModal(transferId, transferNumber) {
+    // Reuse the existing rejection modal but update the form action and text
+    document.getElementById('rejectionPONumber').textContent = transferNumber;
+    document.getElementById('rejectionForm').action = `/serial_item_transfer/${transferId}/qc_reject`;
+    
+    // Update modal title for Serial Item Transfer
+    document.querySelector('#rejectionModal .modal-title').textContent = 'Reject Serial Item Transfer';
+    
+    // Update alert text
+    const alertDiv = document.querySelector('#rejectionModal .alert');
+    alertDiv.innerHTML = `
+        <i data-feather="alert-triangle"></i>
+        Are you sure you want to reject Serial Item Transfer <strong>${transferNumber}</strong>?
+    `;
+    
+    // Re-initialize feather icons in the modal
+    feather.replace();
+    
+    const modal = new bootstrap.Modal(document.getElementById('rejectionModal'));
+    modal.show();
+}
+
+// SAP Posting Function for Serial Item Transfers
+function postSerialItemTransferToSAP(transferId, transferNumber) {
+    if (!confirm(`Post Serial Item Transfer ${transferNumber} to SAP B1?`)) {
+        return;
+    }
+    
+    const button = event.target.closest('button');
+    const originalHTML = button.innerHTML;
+    
+    // Show loading state
+    button.disabled = true;
+    button.innerHTML = '<i data-feather="loader" class="spin"></i> Posting...';
+    feather.replace();
+    
+    fetch(`/serial_item_transfer/${transferId}/post_to_sap`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Show success message
+            showAlert(`Success: ${data.message}`, 'success');
+            
+            // Update button to show posted status
+            button.outerHTML = `
+                <span class="text-success">
+                    <i data-feather="check-circle"></i> Posted: ${data.sap_document_number}
+                </span>
+            `;
+            feather.replace();
+            
+            // Refresh the page after a short delay to update all data
+            setTimeout(() => {
+                location.reload();
+            }, 2000);
+            
+        } else {
+            // Show error message
+            showAlert(`Error: ${data.error}`, 'error');
+            
+            // Reset button
+            button.disabled = false;
+            button.innerHTML = originalHTML;
+            feather.replace();
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showAlert('Network error posting to SAP B1', 'error');
+        
+        // Reset button
+        button.disabled = false;
+        button.innerHTML = originalHTML;
+        feather.replace();
+    });
+}
+
+// Enhanced alert function
+function showAlert(message, type) {
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show position-fixed`;
+    alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
+    
+    alertDiv.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    document.body.appendChild(alertDiv);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        if (alertDiv.parentNode) {
+            alertDiv.remove();
+        }
+    }, 5000);
+}
+
+// Refresh data function
+function refreshData() {
+    location.reload();
 }
 
 // Transfer approval functions

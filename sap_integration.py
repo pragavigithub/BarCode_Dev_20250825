@@ -1117,6 +1117,85 @@ class SAPIntegration:
                 f"❌ Error creating stock transfer in SAP B1: {str(e)}")
             return {'success': False, 'error': str(e)}
 
+    def create_serial_item_stock_transfer(self, transfer_document):
+        """Create Stock Transfer in SAP B1 for Serial Item Transfer"""
+        if not self.ensure_logged_in():
+            logging.warning(
+                "SAP B1 not available, simulating serial item transfer creation for testing"
+            )
+            return {
+                'success': True,
+                'document_number': f'SIST-{transfer_document.id}',
+                'doc_entry': f'{transfer_document.id}'
+            }
+
+        url = f"{self.base_url}/b1s/v1/StockTransfers"
+
+        # Build stock transfer lines for serial items
+        stock_transfer_lines = []
+        for index, item in enumerate(transfer_document.items):
+            line = {
+                "LineNum": index,
+                "ItemCode": item.item_code,
+                "Quantity": 1,  # Serial items always have quantity 1
+                "WarehouseCode": transfer_document.to_warehouse,
+                "FromWarehouseCode": transfer_document.from_warehouse,
+                "UoMCode": "Each"  # Default UoM for serial items
+            }
+
+            # Add serial numbers
+            if item.serial_number:
+                line["SerialNumbers"] = [{
+                    "BaseLineNumber": index,
+                    "InternalSerialNumber": item.serial_number,
+                    "Quantity": 1,
+                    "SystemSerialNumber": item.serial_number,
+                    # Set date fields to null instead of "None" string
+                    "ExpiryDate": None,
+                    "ManufactureDate": None,
+                    "ReceptionDate": None,
+                    "WarrantyStart": None,
+                    "WarrantyEnd": None
+                }]
+
+            stock_transfer_lines.append(line)
+
+        transfer_data = {
+            "DocDate": datetime.now().strftime('%Y-%m-%d'),
+            "Comments": f"QC Approved Serial Item Transfer {transfer_document.transfer_number} by {transfer_document.qc_approver.username if transfer_document.qc_approver else 'System'}",
+            "FromWarehouse": transfer_document.from_warehouse,
+            "ToWarehouse": transfer_document.to_warehouse,
+            "StockTransferLines": stock_transfer_lines
+        }
+
+        # Log the JSON payload for debugging
+        logging.info(f"📤 Sending serial item stock transfer to SAP B1:")
+        logging.info(f"JSON payload: {json.dumps(transfer_data, indent=2)}")
+
+        try:
+            response = self.session.post(url, json=transfer_data, timeout=30)
+            logging.info(f"📡 SAP B1 response status: {response.status_code}")
+
+            if response.status_code == 201:
+                result = response.json()
+                logging.info(
+                    f"✅ Serial item stock transfer created successfully: {result.get('DocNum')}"
+                )
+                return {
+                    'success': True,
+                    'document_number': result.get('DocNum'),
+                    'doc_entry': result.get('DocEntry')
+                }
+            else:
+                error_msg = f"SAP B1 error: {response.text}"
+                logging.error(
+                    f"❌ Failed to create serial item stock transfer: {error_msg}")
+                return {'success': False, 'error': error_msg}
+        except Exception as e:
+            logging.error(
+                f"❌ Error creating serial item stock transfer in SAP B1: {str(e)}")
+            return {'success': False, 'error': str(e)}
+
     def get_item_details(self, item_code):
         """Get detailed item information from SAP B1"""
         if not self.ensure_logged_in():

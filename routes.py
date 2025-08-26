@@ -1510,6 +1510,9 @@ def qc_dashboard():
     # Get pending Serial Item Transfers for QC approval
     pending_serial_item_transfers = SerialItemTransfer.query.filter_by(status='submitted').order_by(SerialItemTransfer.created_at.desc()).all()
     
+    # Get QC approved Serial Item Transfers ready for SAP posting
+    qc_approved_serial_item_transfers = SerialItemTransfer.query.filter_by(status='qc_approved').order_by(SerialItemTransfer.qc_approved_at.desc()).all()
+    
     # Calculate metrics for today
     from datetime import datetime, date
     today = date.today()
@@ -1665,10 +1668,169 @@ def qc_dashboard():
                          pending_grpos=pending_grpos,
                          pending_serial_transfers=pending_serial_transfers,
                          pending_serial_item_transfers=pending_serial_item_transfers,
+                         qc_approved_serial_item_transfers=qc_approved_serial_item_transfers,
                          pending_count=len(pending_transfers) + len(pending_grpos) + len(pending_serial_transfers) + len(pending_serial_item_transfers),
                          approved_today=approved_today,
                          rejected_today=rejected_today,
                          avg_processing_time=avg_processing_time)
+
+@app.route('/serial_item_transfer/<int:transfer_id>/qc_approve', methods=['POST'])
+@login_required
+def approve_serial_item_transfer_qc(transfer_id):
+    """Approve Serial Item Transfer from QC Dashboard"""
+    try:
+        from models import SerialItemTransfer
+        transfer = SerialItemTransfer.query.get_or_404(transfer_id)
+        
+        # Check QC permissions
+        if not current_user.has_permission('qc_dashboard') and current_user.role not in ['admin', 'manager']:
+            flash('Access denied - QC permissions required', 'error')
+            return redirect(url_for('qc_dashboard'))
+        
+        if transfer.status != 'submitted':
+            flash('Only submitted transfers can be approved', 'error')
+            return redirect(url_for('qc_dashboard'))
+        
+        # Get QC notes
+        qc_notes = request.form.get('qc_notes', '').strip()
+        
+        # Update transfer status
+        transfer.status = 'qc_approved'
+        transfer.qc_approver_id = current_user.id
+        transfer.qc_approved_at = datetime.utcnow()
+        transfer.qc_notes = qc_notes
+        transfer.updated_at = datetime.utcnow()
+        
+        # Update all items to approved status
+        for item in transfer.items:
+            item.qc_status = 'approved'
+            item.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        logging.info(f"✅ Serial Item Transfer {transfer_id} approved by {current_user.username}")
+        flash(f'Serial Item Transfer {transfer.transfer_number} approved successfully!', 'success')
+        
+        return redirect(url_for('qc_dashboard'))
+        
+    except Exception as e:
+        logging.error(f"Error approving serial item transfer: {str(e)}")
+        db.session.rollback()
+        flash('Error approving transfer', 'error')
+        return redirect(url_for('qc_dashboard'))
+
+@app.route('/serial_item_transfer/<int:transfer_id>/qc_reject', methods=['POST'])
+@login_required
+def reject_serial_item_transfer_qc(transfer_id):
+    """Reject Serial Item Transfer from QC Dashboard"""
+    try:
+        from models import SerialItemTransfer
+        transfer = SerialItemTransfer.query.get_or_404(transfer_id)
+        
+        # Check QC permissions
+        if not current_user.has_permission('qc_dashboard') and current_user.role not in ['admin', 'manager']:
+            flash('Access denied - QC permissions required', 'error')
+            return redirect(url_for('qc_dashboard'))
+        
+        if transfer.status != 'submitted':
+            flash('Only submitted transfers can be rejected', 'error')
+            return redirect(url_for('qc_dashboard'))
+        
+        # Get rejection reason (required)
+        qc_notes = request.form.get('qc_notes', '').strip()
+        if not qc_notes:
+            flash('Rejection reason is required', 'error')
+            return redirect(url_for('qc_dashboard'))
+        
+        # Update transfer status
+        transfer.status = 'rejected'
+        transfer.qc_approver_id = current_user.id
+        transfer.qc_approved_at = datetime.utcnow()
+        transfer.qc_notes = qc_notes
+        transfer.updated_at = datetime.utcnow()
+        
+        # Update all items to rejected status
+        for item in transfer.items:
+            item.qc_status = 'rejected'
+            item.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        logging.info(f"❌ Serial Item Transfer {transfer_id} rejected by {current_user.username}")
+        flash(f'Serial Item Transfer {transfer.transfer_number} rejected.', 'warning')
+        return redirect(url_for('qc_dashboard'))
+        
+    except Exception as e:
+        logging.error(f"Error rejecting serial item transfer: {str(e)}")
+        db.session.rollback()
+        flash('Error rejecting transfer', 'error')
+        return redirect(url_for('qc_dashboard'))
+
+@app.route('/serial_item_transfer/<int:transfer_id>/post_to_sap', methods=['POST'])
+@login_required
+def post_serial_item_transfer_to_sap(transfer_id):
+    """Post Serial Item Transfer to SAP B1 from QC Dashboard"""
+    try:
+        from models import SerialItemTransfer
+        transfer = SerialItemTransfer.query.get_or_404(transfer_id)
+        
+        # Check QC permissions
+        if not current_user.has_permission('qc_dashboard') and current_user.role not in ['admin', 'manager']:
+            return jsonify({'success': False, 'error': 'Access denied - QC permissions required'}), 403
+        
+        if transfer.status != 'qc_approved':
+            return jsonify({'success': False, 'error': 'Only QC approved transfers can be posted'}), 400
+        
+        # Initialize SAP integration
+        sap = SAPIntegration()
+        
+        # Ensure SAP connection
+        if not sap.ensure_logged_in():
+            return jsonify({
+                'success': False,
+                'error': 'SAP B1 connection failed. Please try again.'
+            }), 500
+        
+        # Post to SAP B1
+        try:
+            sap_result = sap.create_serial_item_stock_transfer(transfer)
+        except Exception as api_error:
+            logging.error(f"SAP B1 API error for transfer {transfer_id}: {str(api_error)}")
+            return jsonify({
+                'success': False,
+                'error': f'SAP B1 connection error: {str(api_error)}'
+            }), 500
+        
+        if sap_result.get('success'):
+            # Update transfer status and SAP document info
+            transfer.status = 'posted'
+            transfer.sap_document_number = sap_result.get('document_number')
+            transfer.updated_at = datetime.utcnow()
+            
+            db.session.commit()
+            
+            logging.info(f"📤 Serial Item Transfer {transfer_id} posted to SAP B1: {sap_result.get('document_number')}")
+            return jsonify({
+                'success': True,
+                'message': f'Transfer posted to SAP B1 successfully. Document Number: {sap_result.get("document_number")}',
+                'sap_document_number': sap_result.get('document_number'),
+                'doc_entry': sap_result.get('doc_entry'),
+                'status': 'posted'
+            })
+        else:
+            # Keep document in QC approved status for retry
+            logging.error(f"SAP B1 posting failed for transfer {transfer_id}: {sap_result.get('error')}")
+            return jsonify({
+                'success': False,
+                'error': f'SAP B1 posting failed: {sap_result.get("error", "Unknown error")}',
+                'retry_available': True,
+                'status': transfer.status  # Keep current status
+            }), 500
+        
+    except Exception as e:
+        logging.error(f"Error posting serial item transfer to SAP: {str(e)}")
+        db.session.rollback()
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 @app.route('/pick_list')
 @login_required
