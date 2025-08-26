@@ -1513,6 +1513,76 @@ def validate_series_with_warehouse_sap(serial_number, item_code, warehouse_code)
             'error': f'Validation error: {str(e)}'
         }
 
+def validate_batch_series_with_warehouse_sap(serial_numbers, item_code, warehouse_code):
+    """Batch validate multiple series against SAP B1 API for optimal performance
+    
+    This function processes large batches of serial numbers in chunks to avoid API timeouts
+    and significantly improve performance when processing 1000+ serial numbers.
+    
+    Args:
+        serial_numbers: List of serial numbers to validate
+        item_code: The item code to check against
+        warehouse_code: Warehouse code to check series availability
+        
+    Returns:
+        Dict with validation results for each serial number
+    """
+    try:
+        from sap_integration import SAPIntegration
+        
+        sap = SAPIntegration()
+        
+        if not serial_numbers:
+            return {}
+        
+        logging.info(f"🚀 Starting batch validation for {len(serial_numbers)} serial numbers")
+        
+        # Use the new batch validation method with optimized chunk size
+        batch_results = sap.validate_batch_series_with_warehouse(
+            serial_numbers, 
+            item_code, 
+            warehouse_code, 
+            batch_size=100  # Process in chunks of 100 for optimal performance
+        )
+        
+        # Transform results to match expected format
+        formatted_results = {}
+        for serial, result in batch_results.items():
+            if result.get('valid') and result.get('available_in_warehouse'):
+                formatted_results[serial] = {
+                    'valid': True,
+                    'SerialNumber': result.get('DistNumber'),
+                    'ItemCode': result.get('ItemCode'),
+                    'WhsCode': result.get('WhsCode'),
+                    'available_in_warehouse': True,
+                    'validation_type': result.get('validation_type', 'batch_warehouse_specific')
+                }
+            elif result.get('valid') and not result.get('available_in_warehouse'):
+                formatted_results[serial] = {
+                    'valid': False,
+                    'error': result.get('warning') or f'Series {serial} is not available in warehouse {warehouse_code}',
+                    'available_in_warehouse': False,
+                    'validation_type': result.get('validation_type', 'batch_warehouse_unavailable')
+                }
+            else:
+                formatted_results[serial] = {
+                    'valid': False,
+                    'error': result.get('error', 'Batch validation failed'),
+                    'validation_type': result.get('validation_type', 'batch_validation_failed')
+                }
+        
+        logging.info(f"✅ Completed batch validation for {len(formatted_results)} serial numbers")
+        return formatted_results
+        
+    except Exception as e:
+        logging.error(f"❌ Error in batch series validation: {str(e)}")
+        # Return error for all serials if batch fails
+        return {serial: {
+            'valid': False,
+            'error': f'Batch validation error: {str(e)}',
+            'validation_type': 'batch_exception'
+        } for serial in serial_numbers}
+
 @transfer_bp.route('/serial/validate', methods=['POST'])
 @login_required
 def validate_serial_api():

@@ -2864,6 +2864,137 @@ class SAPIntegration:
                 'error': f'Validation error: {str(e)}'
             }
 
+    def validate_batch_series_with_warehouse(self, serial_numbers, item_code, warehouse_code, batch_size=100):
+        """Batch validate multiple series against SAP B1 API for improved performance
+        
+        Args:
+            serial_numbers: List of serial numbers to validate
+            item_code: The item code to check against
+            warehouse_code: Warehouse code to check series availability
+            batch_size: Number of serials to process in each batch (default 100)
+            
+        Returns:
+            Dict with validation results for each serial number
+        """
+        if not self.ensure_logged_in():
+            logging.warning("SAP B1 not available, cannot validate batch series")
+            return {serial: {'valid': False, 'error': 'SAP B1 not available'} for serial in serial_numbers}
+        
+        if not serial_numbers:
+            return {}
+            
+        results = {}
+        total_serials = len(serial_numbers)
+        
+        try:
+            # Process serials in batches to avoid API limits and improve performance
+            for i in range(0, total_serials, batch_size):
+                batch = serial_numbers[i:i+batch_size]
+                batch_results = self._validate_batch_chunk(batch, item_code, warehouse_code)
+                results.update(batch_results)
+                
+                # Log progress for large batches
+                if total_serials > 100:
+                    processed = min(i + batch_size, total_serials)
+                    logging.info(f"📊 Batch validation progress: {processed}/{total_serials} serial numbers processed")
+            
+            logging.info(f"✅ Completed batch validation for {total_serials} serial numbers")
+            return results
+            
+        except Exception as e:
+            logging.error(f"❌ Error in batch series validation: {str(e)}")
+            # Return error for all serials if batch fails
+            return {serial: {'valid': False, 'error': f'Batch validation error: {str(e)}'} for serial in serial_numbers}
+    
+    def _validate_batch_chunk(self, serial_batch, item_code, warehouse_code):
+        """Validate a chunk of serial numbers using SAP B1 bulk query
+        
+        Args:
+            serial_batch: List of serial numbers in this chunk
+            item_code: The item code to check against  
+            warehouse_code: Warehouse code to check series availability
+            
+        Returns:
+            Dict with validation results for each serial in the batch
+        """
+        results = {}
+        
+        try:
+            # Create SQL query for batch validation
+            serial_list = "','".join(serial_batch)
+            sql_query = f"""
+            SELECT 
+                SN.DistNumber as SerialNumber,
+                SN.ItemCode,
+                SN.WhsCode,
+                CASE WHEN SN.WhsCode = '{warehouse_code}' THEN 1 ELSE 0 END as AvailableInWarehouse
+            FROM OSRN SN 
+            WHERE SN.DistNumber IN ('{serial_list}')
+            AND SN.ItemCode = '{item_code}'
+            """
+            
+            # Use custom SQL query endpoint
+            api_url = f"{self.base_url}/b1s/v1/SQLQueries('Batch_Series_Validation')/List"
+            
+            payload = {
+                "ParamList": f"sqlQuery={sql_query}"
+            }
+            
+            response = self.session.post(api_url, json=payload, timeout=60)
+            
+            if response.status_code == 200:
+                data = response.json()
+                found_serials = {item.get('SerialNumber'): item for item in data.get('value', [])}
+                
+                # Process each serial in the batch
+                for serial in serial_batch:
+                    if serial in found_serials:
+                        series_data = found_serials[serial]
+                        available_in_warehouse = bool(series_data.get('AvailableInWarehouse', 0))
+                        
+                        results[serial] = {
+                            'valid': True,
+                            'DistNumber': series_data.get('SerialNumber'),
+                            'ItemCode': series_data.get('ItemCode'),
+                            'WhsCode': series_data.get('WhsCode'),
+                            'available_in_warehouse': available_in_warehouse,
+                            'validation_type': 'batch_warehouse_specific' if available_in_warehouse else 'batch_warehouse_unavailable',
+                            'message': f'Series {serial} validated in batch'
+                        }
+                        
+                        if not available_in_warehouse:
+                            results[serial]['warning'] = f'Series {serial} is not available in warehouse {warehouse_code}'
+                    else:
+                        # Serial not found in SAP
+                        results[serial] = {
+                            'valid': False,
+                            'error': f'Series {serial} not found in SAP system',
+                            'available_in_warehouse': False,
+                            'validation_type': 'batch_not_found'
+                        }
+            else:
+                # API error - mark all serials as failed
+                error_msg = f'SAP API error: {response.status_code} - {response.text}'
+                for serial in serial_batch:
+                    results[serial] = {
+                        'valid': False,
+                        'error': error_msg,
+                        'validation_type': 'batch_api_error'
+                    }
+                
+        except Exception as e:
+            logging.error(f"❌ Error in batch chunk validation: {str(e)}")
+            # Mark all serials in chunk as failed
+            error_msg = f'Batch chunk validation error: {str(e)}'
+            for serial in serial_batch:
+                results[serial] = {
+                    'valid': False,
+                    'error': error_msg,
+                    'validation_type': 'batch_exception'
+                }
+        
+        return results
+
 
     def create_serial_number_stock_transfer(self, serial_transfer_document):
         """Create Stock Transfer in SAP B1 for Serial Number Transfer"""
