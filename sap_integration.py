@@ -2864,14 +2864,14 @@ class SAPIntegration:
                 'error': f'Validation error: {str(e)}'
             }
 
-    def validate_batch_series_with_warehouse(self, serial_numbers, item_code, warehouse_code, batch_size=100):
-        """Batch validate multiple series against SAP B1 API for improved performance
+    def validate_batch_series_with_warehouse(self, serial_numbers, item_code, warehouse_code, batch_size=None):
+        """ULTRA-OPTIMIZED batch validation for 2000+ serial numbers with intelligent performance scaling
         
         Args:
             serial_numbers: List of serial numbers to validate
-            item_code: The item code to check against
-            warehouse_code: Warehouse code to check series availability
-            batch_size: Number of serials to process in each batch (default 100)
+            item_code: Item code to validate against
+            warehouse_code: Warehouse code to check availability
+            batch_size: Auto-calculated based on dataset size for optimal performance
             
         Returns:
             Dict with validation results for each serial number
@@ -2882,29 +2882,175 @@ class SAPIntegration:
         
         if not serial_numbers:
             return {}
-            
-        results = {}
+        
         total_serials = len(serial_numbers)
         
+        # INTELLIGENT BATCH SIZING based on dataset size for maximum performance
+        if batch_size is None:
+            if total_serials <= 100:
+                batch_size = 50      # Small batches for quick processing
+            elif total_serials <= 500:
+                batch_size = 100     # Medium batches for balanced performance  
+            elif total_serials <= 1000:
+                batch_size = 200     # Large batches for efficiency
+            elif total_serials <= 2000:
+                batch_size = 300     # Extra-large batches for massive datasets
+            else:
+                batch_size = 400     # ENTERPRISE batches for 2000+ serials
+        
+        logging.info(f"🚀 ENTERPRISE BATCH VALIDATION: Processing {total_serials} serials with {batch_size}-item batches")
+        
+        results = {}
+        start_time = datetime.now()
+        
         try:
-            # Process serials in batches to avoid API limits and improve performance
-            for i in range(0, total_serials, batch_size):
-                batch = serial_numbers[i:i+batch_size]
-                batch_results = self._validate_batch_chunk(batch, item_code, warehouse_code)
+            # ULTRA-PERFORMANCE BATCH PROCESSING with progress monitoring
+            batch_count = (total_serials + batch_size - 1) // batch_size
+            
+            for batch_index in range(0, total_serials, batch_size):
+                batch_start_time = datetime.now()
+                batch = serial_numbers[batch_index:batch_index + batch_size]
+                current_batch_num = (batch_index // batch_size) + 1
+                
+                logging.info(f"⚡ PROCESSING BATCH {current_batch_num}/{batch_count}: {len(batch)} serials")
+                
+                # OPTIMIZED BATCH CHUNK VALIDATION
+                batch_results = self._validate_ultra_batch_chunk(batch, item_code, warehouse_code)
                 results.update(batch_results)
                 
-                # Log progress for large batches
-                if total_serials > 100:
-                    processed = min(i + batch_size, total_serials)
-                    logging.info(f"📊 Batch validation progress: {processed}/{total_serials} serial numbers processed")
+                # ENTERPRISE PERFORMANCE MONITORING
+                batch_time = (datetime.now() - batch_start_time).total_seconds()
+                total_time = (datetime.now() - start_time).total_seconds()
+                processed = min(batch_index + batch_size, total_serials)
+                
+                # Calculate performance metrics
+                serials_per_second = processed / total_time if total_time > 0 else 0
+                estimated_completion = (total_serials - processed) / serials_per_second if serials_per_second > 0 else 0
+                progress_percent = (processed / total_serials) * 100
+                
+                logging.info(f"📊 BATCH {current_batch_num} COMPLETED: {batch_time:.2f}s | Progress: {progress_percent:.1f}% ({processed}/{total_serials}) | Speed: {serials_per_second:.1f} serials/sec | ETA: {estimated_completion:.1f}s")
+                
+                # INTELLIGENT PERFORMANCE OPTIMIZATION - Adjust batch size based on performance
+                if current_batch_num == 2 and batch_time > 5.0:  # If second batch is slow, reduce size
+                    old_batch_size = batch_size
+                    batch_size = max(50, batch_size // 2)
+                    logging.info(f"🔧 PERFORMANCE OPTIMIZATION: Reduced batch size from {old_batch_size} to {batch_size} due to slow processing")
+                elif current_batch_num == 2 and batch_time < 1.0:  # If second batch is fast, increase size
+                    old_batch_size = batch_size
+                    batch_size = min(500, int(batch_size * 1.5))
+                    logging.info(f"🔧 PERFORMANCE OPTIMIZATION: Increased batch size from {old_batch_size} to {batch_size} due to fast processing")
             
-            logging.info(f"✅ Completed batch validation for {total_serials} serial numbers")
+            total_processing_time = (datetime.now() - start_time).total_seconds()
+            average_speed = total_serials / total_processing_time if total_processing_time > 0 else 0
+            
+            logging.info(f"✅ ENTERPRISE VALIDATION COMPLETED: {total_serials} serials in {total_processing_time:.2f}s | Average: {average_speed:.1f} serials/sec")
             return results
             
         except Exception as e:
-            logging.error(f"❌ Error in batch series validation: {str(e)}")
-            # Return error for all serials if batch fails
-            return {serial: {'valid': False, 'error': f'Batch validation error: {str(e)}'} for serial in serial_numbers}
+            logging.error(f"❌ ENTERPRISE BATCH VALIDATION ERROR: {str(e)}")
+            return {serial: {'valid': False, 'error': f'Enterprise batch validation error: {str(e)}'} for serial in serial_numbers}
+    
+    def _validate_ultra_batch_chunk(self, serial_batch, item_code, warehouse_code):
+        """ULTRA-OPTIMIZED validation for large chunks using advanced SQL query optimization
+        
+        Args:
+            serial_batch: List of serial numbers in this chunk
+            item_code: The item code to check against  
+            warehouse_code: Warehouse code to check series availability
+            
+        Returns:
+            Dict with validation results for each serial in the batch
+        """
+        results = {}
+        
+        try:
+            # OPTIMIZED SQL QUERY with improved performance for large datasets
+            serial_list = "','".join(serial_batch)
+            
+            # ENTERPRISE-GRADE SQL QUERY with performance optimizations
+            sql_query = f"""
+            SELECT DISTINCT
+                SN.DistNumber as SerialNumber,
+                SN.ItemCode,
+                SN.WhsCode,
+                CASE WHEN SN.WhsCode = '{warehouse_code}' THEN 1 ELSE 0 END as AvailableInWarehouse,
+                SN.Status,
+                ISNULL(SN.SystemSerial, SN.DistNumber) as SystemSerial
+            FROM OSRN SN WITH (NOLOCK)
+            WHERE SN.DistNumber IN ('{serial_list}')
+            AND SN.ItemCode = '{item_code}'
+            ORDER BY SN.DistNumber
+            """
+            
+            # Use optimized custom SQL query endpoint with increased timeout
+            api_url = f"{self.base_url}/b1s/v1/SQLQueries('Ultra_Batch_Series_Validation')/List"
+            
+            payload = {
+                "ParamList": f"sqlQuery={sql_query}"
+            }
+            
+            # ENTERPRISE TIMEOUT OPTIMIZATION for large datasets
+            timeout = max(60, len(serial_batch) // 10)  # Dynamic timeout based on batch size
+            
+            response = self.session.post(api_url, json=payload, timeout=timeout)
+            
+            if response.status_code == 200:
+                data = response.json()
+                found_serials = {}
+                
+                # Process all found serial numbers
+                if data.get('value'):
+                    for item in data['value']:
+                        serial_num = item.get('SerialNumber')
+                        if serial_num:
+                            found_serials[serial_num] = {
+                                'valid': True,
+                                'SerialNumber': serial_num,
+                                'SystemNumber': item.get('SystemSerial'),
+                                'ItemCode': item.get('ItemCode'),
+                                'WhsCode': item.get('WhsCode'),
+                                'available_in_warehouse': bool(item.get('AvailableInWarehouse')),
+                                'validation_type': 'ultra_batch',
+                                'status': item.get('Status')
+                            }
+                
+                # Process all serials in batch - mark found ones as valid, missing ones as invalid
+                for serial in serial_batch:
+                    if serial in found_serials:
+                        results[serial] = found_serials[serial]
+                    else:
+                        results[serial] = {
+                            'valid': False,
+                            'error': f'Serial number {serial} not found in SAP B1 for item {item_code}',
+                            'validation_type': 'ultra_batch',
+                            'available_in_warehouse': False
+                        }
+                        
+                logging.info(f"✅ ULTRA BATCH: Validated {len(serial_batch)} serials - {len(found_serials)} found, {len(serial_batch) - len(found_serials)} not found")
+                
+            else:
+                # FALLBACK: Use individual validation if batch query fails
+                logging.warning(f"⚠️ ULTRA BATCH FALLBACK: API error {response.status_code}, using individual validation")
+                for serial in serial_batch:
+                    individual_result = self.validate_series_with_warehouse(serial, item_code, warehouse_code)
+                    results[serial] = individual_result
+                    
+        except Exception as e:
+            logging.error(f"❌ ULTRA BATCH CHUNK ERROR: {str(e)}")
+            # EMERGENCY FALLBACK: Use existing batch method
+            try:
+                return self._validate_batch_chunk(serial_batch, item_code, warehouse_code)
+            except:
+                # FINAL FALLBACK: Mark all as validation errors
+                error_msg = f'Ultra batch chunk validation error: {str(e)}'
+                for serial in serial_batch:
+                    results[serial] = {
+                        'valid': False,
+                        'error': error_msg,
+                        'validation_type': 'ultra_batch_exception'
+                    }
+        
+        return results
     
     def _validate_batch_chunk(self, serial_batch, item_code, warehouse_code):
         """Validate a chunk of serial numbers using SAP B1 bulk query
@@ -3239,3 +3385,22 @@ class SAPIntegration:
 
 # Create global SAP integration instance for backward compatibility
 sap_b1 = SAPIntegration()
+
+# Convenience functions for ultra-optimized batch processing
+def validate_batch_series_with_warehouse_sap(serial_numbers, item_code, warehouse_code, batch_size=None):
+    """ULTRA-OPTIMIZED standalone function for batch series validation - handles 2000+ serials efficiently
+    
+    Args:
+        serial_numbers: List of serial numbers to validate
+        item_code: Item code to validate against
+        warehouse_code: Warehouse code to check availability  
+        batch_size: Auto-calculated based on dataset size for optimal performance
+        
+    Returns:
+        Dict with validation results for each serial number
+    """
+    return sap_b1.validate_batch_series_with_warehouse(serial_numbers, item_code, warehouse_code, batch_size)
+
+def validate_series_with_warehouse_sap(serial_number, item_code, warehouse_code):
+    """Standalone function for series validation compatibility"""
+    return sap_b1.validate_series_with_warehouse(serial_number, item_code, warehouse_code)
