@@ -591,9 +591,11 @@ function showSerialTransferRejectionModal(transferId, transferNumber) {
 
 // Serial Item Transfer approval functions
 function showSerialItemTransferApprovalModal(transferId, transferNumber) {
-    if (confirm(`Are you sure you want to approve serial item transfer ${transferNumber}? This will approve the transfer for QC.`)) {
+    const shouldPostToSap = confirm(`Serial Item Transfer ${transferNumber}\n\nPost to SAP B1 after approval?\n\nOK = Approve & Post to SAP immediately\nCancel = Approve only (manual SAP posting later)`);
+    
+    if (confirm(`Are you sure you want to approve serial item transfer ${transferNumber}?`)) {
         // Make AJAX call to approve serial item transfer
-        fetch(`/serial_item_transfer/${transferId}/approve`, {
+        fetch(`/serial-item-transfer/${transferId}/approve`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -602,7 +604,32 @@ function showSerialItemTransferApprovalModal(transferId, transferNumber) {
         })
         .then(response => {
             if (response.redirected) {
-                window.location.href = response.url;
+                // Check if we should post to SAP after approval
+                if (shouldPostToSap) {
+                    // Post to SAP B1 after successful approval
+                    fetch(`/serial-item-transfer/${transferId}/post_to_sap`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        }
+                    })
+                    .then(sapResponse => sapResponse.json())
+                    .then(sapData => {
+                        if (sapData.success) {
+                            alert(`✅ Serial Item Transfer approved and posted to SAP B1!\n\nSAP Document Number: ${sapData.sap_document_number}`);
+                        } else {
+                            alert(`⚠️ Transfer approved but SAP posting failed: ${sapData.error}\n\nPlease post manually from the transfer detail page.`);
+                        }
+                        window.location.href = response.url;
+                    })
+                    .catch(sapError => {
+                        console.error('SAP posting error:', sapError);
+                        alert('⚠️ Transfer approved but SAP posting failed.\n\nPlease post manually from the transfer detail page.');
+                        window.location.href = response.url;
+                    });
+                } else {
+                    window.location.href = response.url;
+                }
             } else {
                 return response.text();
             }

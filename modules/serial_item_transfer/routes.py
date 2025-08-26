@@ -428,9 +428,8 @@ def reject_transfer(transfer_id):
         
         db.session.commit()
         
-        logging.info(f"❌ Serial Item Transfer {transfer_id} rejected by {current_user.username}: {qc_notes}")
-        flash(f'Serial Item Transfer {transfer.transfer_number} rejected', 'warning')
-        
+        logging.info(f"❌ Serial Item Transfer {transfer_id} rejected by {current_user.username}")
+        flash(f'Serial Item Transfer {transfer.transfer_number} rejected.', 'warning')
         return redirect(url_for('qc_dashboard'))
         
     except Exception as e:
@@ -438,3 +437,252 @@ def reject_transfer(transfer_id):
         db.session.rollback()
         flash('Error rejecting transfer', 'error')
         return redirect(url_for('qc_dashboard'))
+
+@serial_item_bp.route('/<int:transfer_id>/validate_serial_only', methods=['POST'])
+@login_required
+def validate_serial_only(transfer_id):
+    """Validate serial number without adding to transfer (for line-by-line validation)"""
+    try:
+        transfer = SerialItemTransfer.query.get_or_404(transfer_id)
+        
+        # Check permissions
+        if transfer.user_id != current_user.id and current_user.role not in ['admin', 'manager']:
+            return jsonify({'success': False, 'error': 'Access denied'}), 403
+        
+        if transfer.status != 'draft':
+            return jsonify({'success': False, 'error': 'Cannot validate items for non-draft transfer'}), 400
+        
+        # Get form data
+        serial_number = request.form.get('serial_number', '').strip()
+        
+        if not serial_number:
+            return jsonify({'success': False, 'error': 'Serial number is required'}), 400
+        
+        # Check for duplicate serial number in this transfer
+        existing_item = SerialItemTransferItem.query.filter_by(
+            serial_item_transfer_id=transfer.id,
+            serial_number=serial_number
+        ).first()
+        
+        if existing_item:
+            return jsonify({
+                'success': False, 
+                'error': f'Serial number {serial_number} already exists in this transfer'
+            }), 400
+        
+        # Validate serial number with SAP B1
+        sap = SAPIntegration()
+        validation_result = sap.validate_serial_item_for_transfer(serial_number, transfer.from_warehouse)
+        
+        logging.info(f"🔍 SAP B1 validation result for {serial_number}: {validation_result}")
+        
+        if not validation_result.get('valid'):
+            return jsonify({
+                'success': False,
+                'error': validation_result.get('error', 'Serial number validation failed')
+            }), 400
+        
+        # Return validation success without adding to database
+        return jsonify({
+            'success': True,
+            'message': f'Serial number {serial_number} validated successfully',
+            'item_code': validation_result.get('item_code'),
+            'item_description': validation_result.get('item_description'),
+            'warehouse_code': validation_result.get('warehouse_code')
+        })
+        
+    except Exception as e:
+        logging.error(f"Error validating serial item: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@serial_item_bp.route('/<int:transfer_id>/add_multiple_serials', methods=['POST'])
+@login_required
+def add_multiple_serials(transfer_id):
+    """Add multiple validated serial items to transfer"""
+    try:
+        transfer = SerialItemTransfer.query.get_or_404(transfer_id)
+        
+        # Check permissions
+        if transfer.user_id != current_user.id and current_user.role not in ['admin', 'manager']:
+            return jsonify({'success': False, 'error': 'Access denied'}), 403
+        
+        if transfer.status != 'draft':
+            return jsonify({'success': False, 'error': 'Cannot add items to non-draft transfer'}), 400
+        
+        # Get validated serials data
+        validated_serials_json = request.form.get('validated_serials', '[]')
+        
+        try:
+            validated_serials = json.loads(validated_serials_json)
+        except json.JSONDecodeError:
+            return jsonify({'success': False, 'error': 'Invalid validated serials data'}), 400
+        
+        if not validated_serials:
+            return jsonify({'success': False, 'error': 'No validated serials provided'}), 400
+        
+        items_added = 0
+        failed_items = []
+        
+        for serial_data in validated_serials:
+            try:
+                serial_number = serial_data.get('serial_number', '').strip()
+                
+                if not serial_number:
+                    failed_items.append({'serial': serial_number, 'error': 'Empty serial number'})
+                    continue
+                
+                # Check for duplicate
+                existing_item = SerialItemTransferItem.query.filter_by(
+                    serial_item_transfer_id=transfer.id,
+                    serial_number=serial_number
+                ).first()
+                
+                if existing_item:
+                    failed_items.append({'serial': serial_number, 'error': 'Already exists in transfer'})
+                    continue
+                
+                # Create transfer item
+                transfer_item = SerialItemTransferItem(
+                    serial_item_transfer_id=transfer.id,
+                    serial_number=serial_number,
+                    item_code=serial_data.get('item_code', ''),
+                    item_description=serial_data.get('item_description', ''),
+                    warehouse_code=serial_data.get('warehouse_code', transfer.from_warehouse),
+                    from_warehouse_code=transfer.from_warehouse,
+                    to_warehouse_code=transfer.to_warehouse,
+                    quantity=1,  # Always 1 for serial items
+                    validation_status='validated',
+                    validation_error=None
+                )
+                
+                db.session.add(transfer_item)
+                items_added += 1
+                
+            except Exception as e:
+                failed_items.append({'serial': serial_data.get('serial_number', 'Unknown'), 'error': str(e)})
+        
+        db.session.commit()
+        
+        logging.info(f"✅ Added {items_added} serial items to transfer {transfer_id}")
+        
+        if failed_items:
+            return jsonify({
+                'success': True,
+                'message': f'{items_added} items added successfully, {len(failed_items)} failed',
+                'items_added': items_added,
+                'failed_items': failed_items
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'message': f'{items_added} serial items added successfully',
+                'items_added': items_added
+            })
+        
+    except Exception as e:
+        logging.error(f"Error adding multiple serial items: {str(e)}")
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@serial_item_bp.route('/<int:transfer_id>/post_to_sap', methods=['POST'])
+@login_required  
+def post_to_sap(transfer_id):
+    """Post approved Serial Item Transfer to SAP B1 as Stock Transfer"""
+    try:
+        transfer = SerialItemTransfer.query.get_or_404(transfer_id)
+        
+        # Check QC permissions
+        if not current_user.has_permission('qc_dashboard') and current_user.role not in ['admin', 'manager']:
+            return jsonify({'success': False, 'error': 'Access denied - QC permissions required'}), 403
+        
+        if transfer.status != 'qc_approved':
+            return jsonify({'success': False, 'error': 'Only QC approved transfers can be posted to SAP'}), 400
+        
+        # Build SAP B1 Stock Transfer JSON
+        sap_transfer_data = {
+            "DocDate": datetime.now().strftime('%Y-%m-%d'),
+            "DueDate": datetime.now().strftime('%Y-%m-%d'),
+            "CardCode": "None",
+            "CardName": "",
+            "Address": "",
+            "Comments": "Serial Number Item Transfer from WMS",
+            "JournalMemo": f"Serial Number Item Transfer - {transfer.transfer_number}",
+            "PriceList": -1,
+            "SalesPersonCode": -1,
+            "FromWarehouse": transfer.from_warehouse,
+            "ToWarehouse": transfer.to_warehouse,
+            "AuthorizationStatus": "sasWithout",
+            "StockTransferLines": []
+        }
+        
+        # Group items by ItemCode for line consolidation
+        item_groups = {}
+        for item in transfer.items:
+            if item.qc_status == 'approved' and item.validation_status == 'validated':
+                if item.item_code not in item_groups:
+                    item_groups[item.item_code] = {
+                        'item_code': item.item_code,
+                        'item_description': item.item_description,
+                        'serials': [],
+                        'quantity': 0
+                    }
+                
+                item_groups[item.item_code]['serials'].append({
+                    "SystemSerialNumber": 0,
+                    "InternalSerialNumber": item.serial_number,
+                    "ManufacturerSerialNumber": item.serial_number,
+                    "ExpiryDate": "None",
+                    "ManufactureDate": "None",
+                    "ReceptionDate": "None",
+                    "WarrantyStart": "None",
+                    "WarrantyEnd": "None",
+                    "Location": "None",
+                    "Notes": "None"
+                })
+                item_groups[item.item_code]['quantity'] += 1
+        
+        # Create stock transfer lines
+        line_num = 0
+        for item_code, group_data in item_groups.items():
+            sap_transfer_data["StockTransferLines"].append({
+                "LineNum": line_num,
+                "ItemCode": item_code,
+                "Quantity": group_data['quantity'],
+                "WarehouseCode": transfer.to_warehouse,
+                "FromWarehouseCode": transfer.from_warehouse,
+                "UoMCode": "EA",
+                "SerialNumbers": group_data['serials']
+            })
+            line_num += 1
+        
+        # Post to SAP B1
+        sap = SAPIntegration()
+        if not sap.ensure_logged_in():
+            return jsonify({'success': False, 'error': 'SAP B1 connection failed'}), 500
+        
+        sap_result = sap.post_stock_transfer(sap_transfer_data)
+        
+        if sap_result.get('success'):
+            # Update transfer status
+            transfer.status = 'posted'
+            transfer.sap_document_number = sap_result.get('document_number')
+            transfer.updated_at = datetime.utcnow()
+            
+            db.session.commit()
+            
+            logging.info(f"📤 Serial Item Transfer {transfer_id} posted to SAP B1: {sap_result.get('document_number')}")
+            return jsonify({
+                'success': True,
+                'message': f'Transfer posted to SAP B1 successfully. Document Number: {sap_result.get("document_number")}',
+                'sap_document_number': sap_result.get('document_number')
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': f'SAP B1 posting failed: {sap_result.get("error", "Unknown error")}'
+            }), 500
+        
+    except Exception as e:
+        logging.error(f"Error posting serial item transfer to SAP: {str(e)}")
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500

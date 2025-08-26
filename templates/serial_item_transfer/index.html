@@ -57,14 +57,15 @@
                 <table class="table table-bordered" id="transfersTable" width="100%" cellspacing="0">
                     <thead>
                         <tr>
-                            <th>Transfer Number</th>
-                            <th>From Warehouse</th>
-                            <th>To Warehouse</th>
-                            <th>Items</th>
-                            <th>Status</th>
-                            <th>Priority</th>
-                            <th>Created Date</th>
-                            <th>Actions</th>
+                            <th width="15%">Transfer Number</th>
+                            <th width="12%">From WH</th>
+                            <th width="12%">To WH</th>
+                            <th width="8%">Items</th>
+                            <th width="8%">Valid</th>
+                            <th width="10%">Status</th>
+                            <th width="8%">Priority</th>
+                            <th width="12%">Created</th>
+                            <th width="15%">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -76,9 +77,25 @@
                                     {{ transfer.transfer_number }}
                                 </a>
                             </td>
-                            <td>{{ transfer.from_warehouse }}</td>
-                            <td>{{ transfer.to_warehouse }}</td>
-                            <td>{{ transfer.items|length }}</td>
+                            <td>
+                                <span class="badge bg-info">{{ transfer.from_warehouse }}</span>
+                            </td>
+                            <td>
+                                <span class="badge bg-success">{{ transfer.to_warehouse }}</span>
+                            </td>
+                            <td class="text-center">
+                                <span class="badge bg-secondary">{{ transfer.items|length }}</span>
+                            </td>
+                            <td class="text-center">
+                                {% set validated_count = transfer.items|selectattr("validation_status", "equalto", "validated")|list|length %}
+                                {% if validated_count == transfer.items|length and transfer.items|length > 0 %}
+                                    <span class="badge bg-success">{{ validated_count }}</span>
+                                {% elif validated_count > 0 %}
+                                    <span class="badge bg-warning">{{ validated_count }}</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">0</span>
+                                {% endif %}
+                            </td>
                             <td>
                                 {% if transfer.status == 'draft' %}
                                     <span class="badge bg-secondary">Draft</span>

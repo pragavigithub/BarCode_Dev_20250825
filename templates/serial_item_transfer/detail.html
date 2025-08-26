@@ -124,23 +124,44 @@
             <!-- Add Serial Item Form -->
             {% if transfer.status == 'draft' and (transfer.user_id == current_user.id or current_user.role in ['admin', 'manager']) %}
             <div class="card shadow">
-                <div class="card-header py-3">
-                    <h6 class="m-0 font-weight-bold text-success">Add Serial Item</h6>
+                <div class="card-header py-3 d-flex justify-content-between align-items-center">
+                    <h6 class="m-0 font-weight-bold text-success">Add Serial Items</h6>
+                    <small class="text-muted">Line by Line Entry</small>
                 </div>
                 <div class="card-body">
-                    <form id="addSerialItemForm">
-                        <div class="mb-3">
-                            <label for="serial_number" class="form-label">Serial Number <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="serial_number" name="serial_number" 
-                                   placeholder="Enter serial number" required>
-                            <div class="form-text">
-                                System will auto-validate and populate item details from SAP B1
+                    <div class="alert alert-info alert-sm">
+                        <small>
+                            <i class="fas fa-info-circle"></i> 
+                            Enter serial number and press <kbd>Tab</kbd> or <kbd>Enter</kbd> to move to next line
+                        </small>
+                    </div>
+                    
+                    <!-- Serial Number Input Grid -->
+                    <div id="serialInputGrid">
+                        <div class="row mb-2 serial-input-row" data-line="1">
+                            <div class="col-2">
+                                <label class="form-label small text-muted">Line 1</label>
+                                <div class="badge bg-secondary w-100">1</div>
+                            </div>
+                            <div class="col-10">
+                                <label class="form-label small text-muted">Serial Number</label>
+                                <input type="text" class="form-control serial-input" data-line="1" 
+                                       placeholder="Enter serial number and press Tab/Enter" autocomplete="off">
+                                <div class="feedback-area mt-1" style="min-height: 20px;">
+                                    <!-- Validation feedback will appear here -->
+                                </div>
                             </div>
                         </div>
-                        <button type="submit" class="btn btn-success w-100">
-                            <i class="fas fa-plus"></i> Add Serial Item
+                    </div>
+                    
+                    <div class="d-flex justify-content-between align-items-center mt-3">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="clearAllInputs()">
+                            <i class="fas fa-eraser"></i> Clear All
                         </button>
-                    </form>
+                        <button type="button" class="btn btn-success" onclick="submitAllValidatedSerials()">
+                            <i class="fas fa-save"></i> Submit All Valid Items
+                        </button>
+                    </div>
                 </div>
             </div>
             {% endif %}
@@ -159,12 +180,14 @@
                         <table class="table table-bordered" id="serialItemsTable">
                             <thead>
                                 <tr>
+                                    <th width="5%">Line</th>
                                     <th width="15%">Serial Number</th>
-                                    <th width="15%">Item Code</th>
-                                    <th width="25%">Item Description</th>
-                                    <th width="12%">Warehouse</th>
-                                    <th width="10%">Validation</th>
-                                    <th width="8%">Qty</th>
+                                    <th width="12%">Item Code</th>
+                                    <th width="20%">Item Description</th>
+                                    <th width="10%">From WH</th>
+                                    <th width="10%">To WH</th>
+                                    <th width="8%">Validation</th>
+                                    <th width="5%">Qty</th>
                                     {% if transfer.status == 'draft' and (transfer.user_id == current_user.id or current_user.role in ['admin', 'manager']) %}
                                     <th width="15%">Actions</th>
                                     {% endif %}
@@ -173,13 +196,19 @@
                             <tbody id="serialItemsTableBody">
                                 {% for item in transfer.items %}
                                 <tr>
+                                    <td class="text-center">
+                                        <span class="badge bg-secondary">{{ loop.index }}</span>
+                                    </td>
                                     <td>
                                         <code>{{ item.serial_number }}</code>
                                     </td>
                                     <td>{{ item.item_code }}</td>
                                     <td>{{ item.item_description }}</td>
                                     <td>
-                                        <span class="badge bg-info">{{ item.warehouse_code }}</span>
+                                        <span class="badge bg-info">{{ item.from_warehouse_code }}</span>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-success">{{ item.to_warehouse_code }}</span>
                                     </td>
                                     <td>
                                         {% if item.validation_status == 'validated' %}
@@ -245,6 +274,32 @@
                             </div>
                         </div>
                     </div>
+                    
+                    <!-- Action Buttons -->
+                    <div class="row mt-4">
+                        <div class="col-12">
+                            <div class="d-flex justify-content-end gap-2">
+                                {% if transfer.status == 'draft' and (transfer.user_id == current_user.id or current_user.role in ['admin', 'manager']) %}
+                                    <button type="button" class="btn btn-primary" onclick="submitTransfer()">
+                                        <i class="fas fa-paper-plane"></i> Submit for QC Approval
+                                    </button>
+                                {% elif transfer.status == 'qc_approved' and (current_user.has_permission('qc_dashboard') or current_user.role in ['admin', 'manager']) %}
+                                    <button type="button" class="btn btn-success" onclick="postToSAP()">
+                                        <i class="fas fa-cloud-upload-alt"></i> Post to SAP B1
+                                    </button>
+                                {% elif transfer.status == 'posted' %}
+                                    <div class="alert alert-success mb-0">
+                                        <i class="fas fa-check-circle"></i> 
+                                        Transfer posted to SAP B1
+                                        {% if transfer.sap_document_number %}
+                                        - Document Number: <strong>{{ transfer.sap_document_number }}</strong>
+                                        {% endif %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    
                     {% else %}
                     <div class="text-center py-4">
                         <i class="fas fa-box-open fa-3x text-muted mb-3"></i>
@@ -263,60 +318,196 @@
 
 {% block scripts %}
 <script>
+let lineCounter = 1;
+let validatedSerials = [];
+
 $(document).ready(function() {
-    // Add serial item form submission
-    $('#addSerialItemForm').on('submit', function(e) {
-        e.preventDefault();
-        addSerialItem();
-    });
+    setupSerialInputHandlers();
     
-    // Allow Enter key to submit form
-    $('#serial_number').on('keypress', function(e) {
-        if (e.which === 13) {
-            e.preventDefault();
-            addSerialItem();
-        }
-    });
+    // Focus on first input
+    $('.serial-input[data-line="1"]').focus();
 });
 
-function addSerialItem() {
-    const serialNumber = $('#serial_number').val().trim();
+function setupSerialInputHandlers() {
+    // Handle Tab and Enter key navigation
+    $(document).on('keydown', '.serial-input', function(e) {
+        const currentLine = parseInt($(this).data('line'));
+        
+        if (e.key === 'Tab' || e.key === 'Enter') {
+            e.preventDefault();
+            
+            const serialNumber = $(this).val().trim();
+            if (serialNumber) {
+                validateAndProcessSerial(currentLine, serialNumber);
+            } else {
+                // Move to next line even if empty
+                addNewLineIfNeeded(currentLine + 1);
+                focusLine(currentLine + 1);
+            }
+        }
+    });
     
-    if (!serialNumber) {
-        showAlert('Please enter a serial number', 'error');
-        return;
-    }
+    // Handle focus out event for validation
+    $(document).on('blur', '.serial-input', function() {
+        const currentLine = parseInt($(this).data('line'));
+        const serialNumber = $(this).val().trim();
+        
+        if (serialNumber) {
+            validateAndProcessSerial(currentLine, serialNumber);
+        }
+    });
+}
+
+function validateAndProcessSerial(lineNumber, serialNumber) {
+    if (!serialNumber) return;
+    
+    const inputElement = $(`.serial-input[data-line="${lineNumber}"]`);
+    const feedbackArea = inputElement.siblings('.feedback-area');
     
     // Show loading state
-    const submitBtn = $('#addSerialItemForm button[type="submit"]');
-    const originalText = submitBtn.html();
-    submitBtn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Validating...');
+    feedbackArea.html('<small class="text-warning"><i class="fas fa-spinner fa-spin"></i> Validating...</small>');
+    inputElement.prop('disabled', true);
     
     $.ajax({
-        url: '{{ url_for("serial_item_transfer.add_serial_item", transfer_id=transfer.id) }}',
+        url: '{{ url_for("serial_item_transfer.validate_serial_only", transfer_id=transfer.id) }}',
         method: 'POST',
         data: {
             serial_number: serialNumber
         },
         success: function(response) {
             if (response.success) {
-                showAlert(`Serial number ${serialNumber} added successfully`, 'success');
-                $('#serial_number').val(''); // Clear form
-                setTimeout(() => location.reload(), 1000); // Reload to show new item
+                // Show success feedback
+                feedbackArea.html(`
+                    <small class="text-success">
+                        <i class="fas fa-check"></i> Valid - ${response.item_code} | ${response.item_description}
+                    </small>
+                `);
+                
+                // Add to validated serials
+                validatedSerials.push({
+                    line: lineNumber,
+                    serial_number: serialNumber,
+                    item_code: response.item_code,
+                    item_description: response.item_description,
+                    warehouse_code: response.warehouse_code
+                });
+                
+                // Mark input as valid
+                inputElement.removeClass('is-invalid').addClass('is-valid').prop('disabled', true);
+                
+                // Move to next line
+                addNewLineIfNeeded(lineNumber + 1);
+                focusLine(lineNumber + 1);
+                
             } else {
-                showAlert(response.error, 'error');
-                // If item was added but validation failed, still reload
-                if (response.item_added) {
-                    setTimeout(() => location.reload(), 2000);
-                }
+                // Show error feedback
+                feedbackArea.html(`
+                    <small class="text-danger">
+                        <i class="fas fa-times"></i> ${response.error}
+                    </small>
+                `);
+                inputElement.removeClass('is-valid').addClass('is-invalid').prop('disabled', false);
             }
         },
         error: function(xhr) {
             const response = xhr.responseJSON;
-            showAlert(response ? response.error : 'Error adding serial item', 'error');
+            feedbackArea.html(`
+                <small class="text-danger">
+                    <i class="fas fa-times"></i> ${response ? response.error : 'Validation error'}
+                </small>
+            `);
+            inputElement.removeClass('is-valid').addClass('is-invalid').prop('disabled', false);
+        }
+    });
+}
+
+function addNewLineIfNeeded(lineNumber) {
+    if ($(`.serial-input-row[data-line="${lineNumber}"]`).length === 0) {
+        const newRow = `
+            <div class="row mb-2 serial-input-row" data-line="${lineNumber}">
+                <div class="col-2">
+                    <label class="form-label small text-muted">Line ${lineNumber}</label>
+                    <div class="badge bg-secondary w-100">${lineNumber}</div>
+                </div>
+                <div class="col-10">
+                    <label class="form-label small text-muted">Serial Number</label>
+                    <input type="text" class="form-control serial-input" data-line="${lineNumber}" 
+                           placeholder="Enter serial number and press Tab/Enter" autocomplete="off">
+                    <div class="feedback-area mt-1" style="min-height: 20px;">
+                        <!-- Validation feedback will appear here -->
+                    </div>
+                </div>
+            </div>
+        `;
+        $('#serialInputGrid').append(newRow);
+        lineCounter = Math.max(lineCounter, lineNumber);
+    }
+}
+
+function focusLine(lineNumber) {
+    setTimeout(() => {
+        $(`.serial-input[data-line="${lineNumber}"]`).focus();
+    }, 100);
+}
+
+function clearAllInputs() {
+    if (confirm('Clear all inputs? This will remove all unsaved serial numbers.')) {
+        $('#serialInputGrid').html(`
+            <div class="row mb-2 serial-input-row" data-line="1">
+                <div class="col-2">
+                    <label class="form-label small text-muted">Line 1</label>
+                    <div class="badge bg-secondary w-100">1</div>
+                </div>
+                <div class="col-10">
+                    <label class="form-label small text-muted">Serial Number</label>
+                    <input type="text" class="form-control serial-input" data-line="1" 
+                           placeholder="Enter serial number and press Tab/Enter" autocomplete="off">
+                    <div class="feedback-area mt-1" style="min-height: 20px;">
+                        <!-- Validation feedback will appear here -->
+                    </div>
+                </div>
+            </div>
+        `);
+        lineCounter = 1;
+        validatedSerials = [];
+        $('.serial-input[data-line="1"]').focus();
+    }
+}
+
+function submitAllValidatedSerials() {
+    if (validatedSerials.length === 0) {
+        showAlert('No validated serial numbers to submit', 'warning');
+        return;
+    }
+    
+    if (!confirm(`Submit ${validatedSerials.length} validated serial numbers?`)) {
+        return;
+    }
+    
+    // Show loading state
+    const submitBtn = $('button[onclick="submitAllValidatedSerials()"]');
+    const originalText = submitBtn.html();
+    submitBtn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Submitting...');
+    
+    $.ajax({
+        url: '{{ url_for("serial_item_transfer.add_multiple_serials", transfer_id=transfer.id) }}',
+        method: 'POST',
+        data: {
+            validated_serials: JSON.stringify(validatedSerials)
+        },
+        success: function(response) {
+            if (response.success) {
+                showAlert(`${response.items_added} serial numbers added successfully`, 'success');
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showAlert(response.error, 'error');
+            }
+        },
+        error: function(xhr) {
+            const response = xhr.responseJSON;
+            showAlert(response ? response.error : 'Error submitting serial numbers', 'error');
         },
         complete: function() {
-            // Restore button state
             submitBtn.prop('disabled', false).html(originalText);
         }
     });
@@ -397,6 +588,36 @@ function submitTransfer() {
         error: function(xhr) {
             const response = xhr.responseJSON;
             showAlert(response ? response.error : 'Error submitting transfer', 'error');
+        }
+    });
+}
+
+function postToSAP() {
+    if (!confirm('Post this approved transfer to SAP B1? This action creates a stock transfer in SAP.')) {
+        return;
+    }
+    
+    // Show loading state
+    const button = $('button[onclick="postToSAP()"]');
+    const originalText = button.html();
+    button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Posting to SAP...');
+    
+    $.ajax({
+        url: '{{ url_for("serial_item_transfer.post_to_sap", transfer_id=transfer.id) }}',
+        method: 'POST',
+        success: function(response) {
+            if (response.success) {
+                showAlert(`✅ Successfully posted to SAP B1! Document Number: ${response.sap_document_number}`, 'success');
+                setTimeout(() => location.reload(), 2000);
+            } else {
+                showAlert(`❌ SAP posting failed: ${response.error}`, 'error');
+                button.prop('disabled', false).html(originalText);
+            }
+        },
+        error: function(xhr) {
+            const response = xhr.responseJSON;
+            showAlert(response ? response.error : 'Error posting to SAP B1', 'error');
+            button.prop('disabled', false).html(originalText);
         }
     });
 }
