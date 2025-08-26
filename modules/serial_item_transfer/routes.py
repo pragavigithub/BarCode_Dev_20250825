@@ -1,0 +1,340 @@
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask_login import login_required, current_user
+from datetime import datetime
+import logging
+import json
+import re
+
+from app import db
+from models import SerialItemTransfer, SerialItemTransferItem, DocumentNumberSeries
+from sap_integration import SAPIntegration
+from sqlalchemy import or_
+
+# Create blueprint for Serial Item Transfer module
+serial_item_bp = Blueprint('serial_item_transfer', __name__, url_prefix='/serial-item-transfer')
+
+def generate_serial_item_transfer_number():
+    """Generate unique transfer number for Serial Item Transfer"""
+    return DocumentNumberSeries.get_next_number('SERIAL_ITEM_TRANSFER')
+
+@serial_item_bp.route('/', methods=['GET'])
+@login_required
+def index():
+    """Serial Item Transfer main page with pagination and user filtering"""
+    if not current_user.has_permission('serial_transfer'):
+        flash('Access denied - Serial Item Transfer permissions required', 'error')
+        return redirect(url_for('dashboard'))
+    
+    # Get pagination parameters
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    search = request.args.get('search', '', type=str)
+    user_based = request.args.get('user_based', 'true')  # Default to user-based filtering
+    
+    # Ensure per_page is within allowed range
+    if per_page not in [10, 25, 50, 100]:
+        per_page = 10
+    
+    # Build base query
+    query = SerialItemTransfer.query
+    
+    # Apply user-based filtering
+    if user_based == 'true' or current_user.role not in ['admin', 'manager']:
+        # Show only current user's transfers (or force for non-admin users)
+        query = query.filter_by(user_id=current_user.id)
+    
+    # Apply search filter if provided
+    if search:
+        search_filter = f"%{search}%"
+        query = query.filter(
+            or_(
+                SerialItemTransfer.transfer_number.ilike(search_filter),
+                SerialItemTransfer.from_warehouse.ilike(search_filter),
+                SerialItemTransfer.to_warehouse.ilike(search_filter),
+                SerialItemTransfer.status.ilike(search_filter)
+            )
+        )
+    
+    # Order and paginate
+    query = query.order_by(SerialItemTransfer.created_at.desc())
+    transfers_paginated = query.paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    
+    return render_template('serial_item_transfer/index.html', 
+                         transfers=transfers_paginated.items,
+                         pagination=transfers_paginated,
+                         search=search,
+                         per_page=per_page,
+                         user_based=user_based,
+                         current_user=current_user)
+
+@serial_item_bp.route('/create', methods=['GET', 'POST'])
+@login_required
+def create():
+    """Create new Serial Item Transfer"""
+    if not current_user.has_permission('serial_transfer'):
+        flash('Access denied - Serial Item Transfer permissions required', 'error')
+        return redirect(url_for('dashboard'))
+    
+    if request.method == 'POST':
+        # Auto-generate transfer number
+        transfer_number = generate_serial_item_transfer_number()
+        from_warehouse = request.form.get('from_warehouse')
+        to_warehouse = request.form.get('to_warehouse')
+        priority = request.form.get('priority', 'normal')
+        notes = request.form.get('notes', '')
+        
+        if not all([from_warehouse, to_warehouse]):
+            flash('From Warehouse and To Warehouse are required', 'error')
+            return render_template('serial_item_transfer/create.html')
+        
+        if from_warehouse == to_warehouse:
+            flash('From Warehouse and To Warehouse must be different', 'error')
+            return render_template('serial_item_transfer/create.html')
+        
+        # Create new Serial Item Transfer
+        transfer = SerialItemTransfer(
+            transfer_number=transfer_number,
+            user_id=current_user.id,
+            from_warehouse=from_warehouse,
+            to_warehouse=to_warehouse,
+            priority=priority,
+            notes=notes,
+            status='draft'
+        )
+        
+        db.session.add(transfer)
+        db.session.commit()
+        
+        flash(f'Serial Item Transfer {transfer_number} created successfully', 'success')
+        return redirect(url_for('serial_item_transfer.detail', transfer_id=transfer.id))
+    
+    return render_template('serial_item_transfer/create.html')
+
+@serial_item_bp.route('/<int:transfer_id>', methods=['GET'])
+@login_required
+def detail(transfer_id):
+    """Serial Item Transfer detail page"""
+    transfer = SerialItemTransfer.query.get_or_404(transfer_id)
+    
+    # Check permissions
+    if transfer.user_id != current_user.id and current_user.role not in ['admin', 'manager', 'qc']:
+        flash('Access denied - You can only view your own transfers', 'error')
+        return redirect(url_for('serial_item_transfer.index'))
+    
+    return render_template('serial_item_transfer/detail.html', transfer=transfer)
+
+@serial_item_bp.route('/<int:transfer_id>/add_serial_item', methods=['POST'])
+@login_required
+def add_serial_item(transfer_id):
+    """Add serial item to Serial Item Transfer with SAP B1 validation"""
+    
+    try:
+        transfer = SerialItemTransfer.query.get_or_404(transfer_id)
+        
+        # Check permissions
+        if transfer.user_id != current_user.id and current_user.role not in ['admin', 'manager']:
+            return jsonify({'success': False, 'error': 'Access denied'}), 403
+        
+        if transfer.status != 'draft':
+            return jsonify({'success': False, 'error': 'Cannot add items to non-draft transfer'}), 400
+        
+        # Get form data
+        serial_number = request.form.get('serial_number', '').strip()
+        
+        if not serial_number:
+            return jsonify({'success': False, 'error': 'Serial number is required'}), 400
+        
+        # Check for duplicate serial number in this transfer
+        existing_item = SerialItemTransferItem.query.filter_by(
+            serial_item_transfer_id=transfer.id,
+            serial_number=serial_number
+        ).first()
+        
+        if existing_item:
+            return jsonify({
+                'success': False, 
+                'error': f'Serial number {serial_number} already exists in this transfer'
+            }), 400
+        
+        # Validate serial number with SAP B1
+        sap = SAPIntegration()
+        validation_result = sap.validate_serial_item_for_transfer(serial_number, transfer.from_warehouse)
+        
+        logging.info(f"🔍 SAP B1 validation result for {serial_number}: {validation_result}")
+        
+        if not validation_result.get('valid'):
+            # Create item with failed validation status
+            transfer_item = SerialItemTransferItem(
+                serial_item_transfer_id=transfer.id,
+                serial_number=serial_number,
+                item_code='UNKNOWN',
+                item_description='Validation Failed',
+                warehouse_code=transfer.from_warehouse,
+                from_warehouse_code=transfer.from_warehouse,
+                to_warehouse_code=transfer.to_warehouse,
+                validation_status='failed',
+                validation_error=validation_result.get('error', 'Unknown validation error')
+            )
+            
+            db.session.add(transfer_item)
+            db.session.commit()
+            
+            return jsonify({
+                'success': False,
+                'error': validation_result.get('error', 'Serial number validation failed'),
+                'item_added': True,
+                'validation_status': 'failed'
+            }), 400
+        
+        # Create transfer item with validated data
+        transfer_item = SerialItemTransferItem(
+            serial_item_transfer_id=transfer.id,
+            serial_number=serial_number,
+            item_code=validation_result.get('item_code', ''),
+            item_description=validation_result.get('item_description', ''),
+            warehouse_code=validation_result.get('warehouse_code', transfer.from_warehouse),
+            from_warehouse_code=transfer.from_warehouse,
+            to_warehouse_code=transfer.to_warehouse,
+            quantity=1,  # Always 1 for serial items
+            validation_status='validated',
+            validation_error=None
+        )
+        
+        db.session.add(transfer_item)
+        db.session.commit()
+        
+        logging.info(f"✅ Serial item {serial_number} added to transfer {transfer_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Serial number {serial_number} added successfully',
+            'item_code': validation_result.get('item_code'),
+            'item_description': validation_result.get('item_description'),
+            'warehouse_code': validation_result.get('warehouse_code')
+        })
+        
+    except Exception as e:
+        logging.error(f"Error adding serial item: {str(e)}")
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@serial_item_bp.route('/items/<int:item_id>/delete', methods=['POST'])
+@login_required
+def delete_item(item_id):
+    """Delete serial item transfer item"""
+    try:
+        item = SerialItemTransferItem.query.get_or_404(item_id)
+        transfer = item.serial_item_transfer
+        
+        # Check permissions
+        if transfer.user_id != current_user.id and current_user.role not in ['admin', 'manager']:
+            return jsonify({'success': False, 'error': 'Access denied'}), 403
+        
+        if transfer.status != 'draft':
+            return jsonify({'success': False, 'error': 'Cannot delete items from non-draft transfer'}), 400
+        
+        transfer_id = transfer.id
+        serial_number = item.serial_number
+        
+        db.session.delete(item)
+        db.session.commit()
+        
+        logging.info(f"🗑️ Serial item {serial_number} deleted from transfer {transfer_id}")
+        return jsonify({'success': True, 'message': f'Serial item {serial_number} deleted'})
+        
+    except Exception as e:
+        logging.error(f"Error deleting serial item: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@serial_item_bp.route('/<int:transfer_id>/submit', methods=['POST'])
+@login_required
+def submit_transfer(transfer_id):
+    """Submit Serial Item Transfer for QC approval"""
+    try:
+        transfer = SerialItemTransfer.query.get_or_404(transfer_id)
+        
+        # Check permissions
+        if transfer.user_id != current_user.id and current_user.role not in ['admin', 'manager']:
+            return jsonify({'success': False, 'error': 'Access denied'}), 403
+        
+        if transfer.status != 'draft':
+            return jsonify({'success': False, 'error': 'Only draft transfers can be submitted'}), 400
+        
+        # Check if transfer has items
+        if not transfer.items:
+            return jsonify({'success': False, 'error': 'Cannot submit transfer without items'}), 400
+        
+        # Check if all items are validated
+        failed_items = [item for item in transfer.items if item.validation_status == 'failed']
+        if failed_items:
+            return jsonify({
+                'success': False, 
+                'error': f'Cannot submit transfer with {len(failed_items)} failed validation items'
+            }), 400
+        
+        # Update status
+        transfer.status = 'submitted'
+        transfer.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        logging.info(f"📤 Serial Item Transfer {transfer_id} submitted for QC approval")
+        return jsonify({'success': True, 'message': 'Transfer submitted for QC approval'})
+        
+    except Exception as e:
+        logging.error(f"Error submitting transfer: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@serial_item_bp.route('/items/<int:item_id>/revalidate', methods=['POST'])
+@login_required
+def revalidate_item(item_id):
+    """Re-validate a failed serial item against SAP B1"""
+    try:
+        item = SerialItemTransferItem.query.get_or_404(item_id)
+        transfer = item.serial_item_transfer
+        
+        # Check permissions
+        if transfer.user_id != current_user.id and current_user.role not in ['admin', 'manager']:
+            return jsonify({'success': False, 'error': 'Access denied'}), 403
+        
+        if transfer.status != 'draft':
+            return jsonify({'success': False, 'error': 'Cannot revalidate items in non-draft transfer'}), 400
+        
+        # Validate serial number with SAP B1
+        sap = SAPIntegration()
+        validation_result = sap.validate_serial_item_for_transfer(item.serial_number, transfer.from_warehouse)
+        
+        if validation_result.get('valid'):
+            # Update item with validated data
+            item.item_code = validation_result.get('item_code', '')
+            item.item_description = validation_result.get('item_description', '')
+            item.warehouse_code = validation_result.get('warehouse_code', transfer.from_warehouse)
+            item.validation_status = 'validated'
+            item.validation_error = None
+            item.updated_at = datetime.utcnow()
+            
+            db.session.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': f'Serial number {item.serial_number} revalidated successfully',
+                'item_code': item.item_code,
+                'item_description': item.item_description
+            })
+        else:
+            # Update validation error
+            item.validation_error = validation_result.get('error', 'Unknown validation error')
+            item.updated_at = datetime.utcnow()
+            
+            db.session.commit()
+            
+            return jsonify({
+                'success': False,
+                'error': validation_result.get('error', 'Serial number validation failed')
+            })
+        
+    except Exception as e:
+        logging.error(f"Error revalidating serial item: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500

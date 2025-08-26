@@ -244,7 +244,10 @@ except Exception as e:
 
 # Import and register blueprints
 from modules.inventory_transfer.routes import transfer_bp
+from modules.serial_item_transfer.routes import serial_item_bp
+
 app.register_blueprint(transfer_bp)
+app.register_blueprint(serial_item_bp)
 
 # Import routes to register them
 import routes

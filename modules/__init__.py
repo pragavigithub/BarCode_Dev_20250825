@@ -1,1 +1,1 @@
-# Modules package initialization
+# Modules package

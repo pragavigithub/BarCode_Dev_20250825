@@ -53,6 +53,7 @@ class User(UserMixin, db.Model):
             'grpo': False,
             'inventory_transfer': False,
             'serial_transfer': False,
+            'serial_item_transfer': False,  # New Serial Item Transfer module
             'batch_transfer': False,
             'pick_list': False,
             'inventory_counting': False,
@@ -71,6 +72,7 @@ class User(UserMixin, db.Model):
                 'grpo': True,
                 'inventory_transfer': True,
                 'serial_transfer': True,
+                'serial_item_transfer': True,  # Allow managers access to Serial Item Transfer
                 'batch_transfer': True,
                 'pick_list': True,
                 'inventory_counting': True,
@@ -89,6 +91,7 @@ class User(UserMixin, db.Model):
                 'grpo': True,
                 'inventory_transfer': True,
                 'serial_transfer': True,
+                'serial_item_transfer': True,  # Allow regular users access to Serial Item Transfer
                 'batch_transfer': True,
                 'pick_list': True,
                 'inventory_counting': True,
@@ -720,3 +723,55 @@ class SerialNumberTransferSerial(db.Model):
     # Note: Unique constraint removed to allow duplicate serial numbers for user review
     # Users can now add duplicates and manually delete unwanted entries from the UI
     # __table_args__ = (db.UniqueConstraint('transfer_item_id', 'serial_number', name='unique_serial_per_item'),)
+
+
+# ================================
+# Serial Item Transfer Models (New Module)
+# ================================
+
+class SerialItemTransfer(db.Model):
+    """Serial Item Transfer Document Header - New module for serial-driven transfers"""
+    __tablename__ = 'serial_item_transfers'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    transfer_number = db.Column(db.String(50), nullable=False, unique=True)
+    sap_document_number = db.Column(db.String(50))
+    status = db.Column(db.String(20), default='draft')  # draft, submitted, qc_approved, posted, rejected
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    qc_approver_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    qc_approved_at = db.Column(db.DateTime)
+    qc_notes = db.Column(db.Text)
+    from_warehouse = db.Column(db.String(10), nullable=False)
+    to_warehouse = db.Column(db.String(10), nullable=False)
+    priority = db.Column(db.String(10), default='normal')  # low, normal, high, urgent
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    user = db.relationship('User', foreign_keys=[user_id], backref='serial_item_transfers')
+    qc_approver = db.relationship('User', foreign_keys=[qc_approver_id])
+    items = db.relationship('SerialItemTransferItem', backref='serial_item_transfer', lazy=True, cascade='all, delete-orphan')
+
+class SerialItemTransferItem(db.Model):
+    """Serial Item Transfer Line Items - Auto-populated from serial number validation"""
+    __tablename__ = 'serial_item_transfer_items'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    serial_item_transfer_id = db.Column(db.Integer, db.ForeignKey('serial_item_transfers.id'), nullable=False)
+    serial_number = db.Column(db.String(100), nullable=False)  # The entered serial number
+    item_code = db.Column(db.String(50), nullable=False)  # Auto-populated from SAP B1
+    item_description = db.Column(db.String(200), nullable=False)  # Auto-populated from SAP B1
+    warehouse_code = db.Column(db.String(10), nullable=False)  # From SAP B1 validation
+    quantity = db.Column(db.Integer, default=1, nullable=False)  # Always 1 for serial items
+    unit_of_measure = db.Column(db.String(10), default='EA')
+    from_warehouse_code = db.Column(db.String(10), nullable=False)
+    to_warehouse_code = db.Column(db.String(10), nullable=False)
+    qc_status = db.Column(db.String(20), default='pending')  # pending, approved, rejected
+    validation_status = db.Column(db.String(20), default='pending')  # pending, validated, failed
+    validation_error = db.Column(db.Text)  # Error message if validation fails
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Unique constraint to prevent duplicate serial numbers in same transfer
+    __table_args__ = (db.UniqueConstraint('serial_item_transfer_id', 'serial_number', name='unique_serial_per_transfer'),)

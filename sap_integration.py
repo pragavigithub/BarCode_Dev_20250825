@@ -2906,6 +2906,115 @@ class SAPIntegration:
             logging.error(error_msg)
             return {'success': False, 'error': error_msg}
 
+    def validate_serial_item_for_transfer(self, serial_number, warehouse_code):
+        """
+        Validate serial number and get item details using SAP B1 SQL Query for Serial Item Transfer
+        Uses the specific API endpoint: SQLQueries('Item_Validation')/List
+        """
+        try:
+            if not self.ensure_logged_in():
+                logging.warning("SAP B1 not available, returning mock validation for Serial Item Transfer")
+                return {
+                    'valid': True,
+                    'item_code': 'MOCK-ITEM',
+                    'item_description': f'Mock Item for {serial_number}',
+                    'warehouse_code': warehouse_code,
+                    'dist_number': serial_number,
+                    'source': 'mock'
+                }
+
+            # SAP B1 SQL Query API endpoint as specified
+            url = f"{self.base_url}/b1s/v1/SQLQueries('Item_Validation')/List"
+            
+            # Request body with parameters as specified
+            request_body = {
+                "ParamList": f"seriel_number='{serial_number}'&whcode='{warehouse_code}'"
+            }
+            
+            logging.info(f"🔍 Validating serial {serial_number} in warehouse {warehouse_code} via SAP B1 SQL Query")
+            logging.info(f"📡 Request URL: {url}")
+            logging.info(f"📦 Request Body: {request_body}")
+            
+            response = self.session.post(url, json=request_body, timeout=30)
+            logging.info(f"📡 Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                logging.info(f"📦 SAP B1 Response: {data}")
+                
+                # Check if we have results
+                values = data.get('value', [])
+                if values and len(values) > 0:
+                    # Get the first matching result
+                    result = values[0]
+                    item_code = result.get('ItemCode', '')
+                    dist_number = result.get('DistNumber', '')
+                    whs_code = result.get('WhsCode', '')
+                    
+                    # For item description, we'll need to make another call to get item details
+                    item_description = self._get_item_description(item_code)
+                    
+                    logging.info(f"✅ Serial number {serial_number} validated successfully")
+                    logging.info(f"📋 Item Code: {item_code}, Warehouse: {whs_code}")
+                    
+                    return {
+                        'valid': True,
+                        'item_code': item_code,
+                        'item_description': item_description,
+                        'warehouse_code': whs_code,
+                        'dist_number': dist_number,
+                        'source': 'sap_b1',
+                        'sql_text': data.get('SqlText', '')
+                    }
+                else:
+                    # No results found
+                    logging.warning(f"❌ Serial number {serial_number} not found in warehouse {warehouse_code}")
+                    return {
+                        'valid': False,
+                        'error': f'Serial number {serial_number} not found in warehouse {warehouse_code} or quantity is 0',
+                        'source': 'sap_b1'
+                    }
+            else:
+                # API call failed
+                logging.error(f"❌ SAP B1 API call failed: {response.status_code} - {response.text}")
+                return {
+                    'valid': False,
+                    'error': f'SAP B1 API call failed: {response.status_code} - {response.text}',
+                    'source': 'sap_b1_error'
+                }
+                
+        except Exception as e:
+            logging.error(f"❌ Error validating serial item: {str(e)}")
+            return {
+                'valid': False,
+                'error': f'Error validating serial item: {str(e)}',
+                'source': 'error'
+            }
+
+    def _get_item_description(self, item_code):
+        """
+        Get item description from SAP B1 Items master data
+        """
+        try:
+            if not item_code:
+                return "Unknown Item"
+                
+            # Try to get item description from Items master data
+            url = f"{self.base_url}/b1s/v1/Items?$filter=ItemCode eq '{item_code}'&$select=ItemCode,ItemName"
+            response = self.session.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get('value', [])
+                if items and len(items) > 0:
+                    return items[0].get('ItemName', f'Item {item_code}')
+                    
+        except Exception as e:
+            logging.warning(f"⚠️ Could not fetch item description for {item_code}: {str(e)}")
+            
+        # Fallback to item code if description not found
+        return f'Item {item_code}'
+
     def logout(self):
         """Logout from SAP B1"""
         if self.session_id:
