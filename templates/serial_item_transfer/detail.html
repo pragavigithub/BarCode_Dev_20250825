@@ -174,10 +174,6 @@
                     <h6 class="m-0 font-weight-bold text-primary">Serial Items</h6>
                     <div>
                         <span class="badge bg-primary me-2">{{ transfer.items|length }} items</span>
-                        {% set duplicate_count = transfer.items|groupby('serial_number')|selectattr('1', 'length', '>', 1)|list|length %}
-                        {% if duplicate_count > 0 %}
-                            <span class="badge bg-warning text-dark">{{ duplicate_count }} duplicates</span>
-                        {% endif %}
                     </div>
                 </div>
                 <div class="card-body">
