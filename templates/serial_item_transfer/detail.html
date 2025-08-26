@@ -259,7 +259,12 @@
                     </div>
                     
                     <!-- Duplicate Items Alert -->
-                    {% set duplicate_items = transfer.items|groupby('serial_number')|selectattr('1', 'length', '>', 1)|list %}
+                    {% set duplicate_items = [] %}
+                    {% for serial, items in transfer.items|groupby('serial_number') %}
+                        {% if items|list|length > 1 %}
+                            {% set _ = duplicate_items.append((serial, items|list)) %}
+                        {% endif %}
+                    {% endfor %}
                     {% if duplicate_items %}
                     <div class="alert alert-warning mt-3">
                         <i class="fas fa-exclamation-triangle"></i>
