@@ -773,5 +773,5 @@ class SerialItemTransferItem(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Unique constraint to prevent duplicate serial numbers in same transfer
-    __table_args__ = (db.UniqueConstraint('serial_item_transfer_id', 'serial_number', name='unique_serial_per_transfer'),)
+    # Note: Allowing duplicate serial numbers for user review and manual deletion
+    # __table_args__ = (db.UniqueConstraint('serial_item_transfer_id', 'serial_number', name='unique_serial_per_transfer'),)

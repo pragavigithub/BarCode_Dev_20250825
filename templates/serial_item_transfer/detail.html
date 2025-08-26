@@ -172,45 +172,58 @@
             <div class="card shadow">
                 <div class="card-header py-3 d-flex justify-content-between align-items-center">
                     <h6 class="m-0 font-weight-bold text-primary">Serial Items</h6>
-                    <span class="badge bg-primary">{{ transfer.items|length }} items</span>
+                    <div>
+                        <span class="badge bg-primary me-2">{{ transfer.items|length }} items</span>
+                        {% set duplicate_count = transfer.items|groupby('serial_number')|selectattr('1', 'length', '>', 1)|list|length %}
+                        {% if duplicate_count > 0 %}
+                            <span class="badge bg-warning text-dark">{{ duplicate_count }} duplicates</span>
+                        {% endif %}
+                    </div>
                 </div>
                 <div class="card-body">
                     {% if transfer.items %}
                     <div class="table-responsive">
-                        <table class="table table-bordered" id="serialItemsTable">
-                            <thead>
+                        <table class="table table-bordered table-sm" id="serialItemsTable" style="font-size: 0.9rem;">
+                            <thead class="table-dark">
                                 <tr>
-                                    <th width="5%">Line</th>
-                                    <th width="15%">Serial Number</th>
-                                    <th width="12%">Item Code</th>
-                                    <th width="20%">Item Description</th>
-                                    <th width="10%">From WH</th>
-                                    <th width="10%">To WH</th>
-                                    <th width="8%">Validation</th>
-                                    <th width="5%">Qty</th>
+                                    <th style="width: 60px;">Line</th>
+                                    <th style="width: 140px;">Serial Number</th>
+                                    <th style="width: 120px;">Item Code</th>
+                                    <th style="width: 200px;">Item Description</th>
+                                    <th style="width: 90px;">From WH</th>
+                                    <th style="width: 90px;">To WH</th>
+                                    <th style="width: 90px;">Validation</th>
+                                    <th style="width: 50px;">Qty</th>
                                     {% if transfer.status == 'draft' and (transfer.user_id == current_user.id or current_user.role in ['admin', 'manager']) %}
-                                    <th width="15%">Actions</th>
+                                    <th style="width: 120px;">Actions</th>
                                     {% endif %}
                                 </tr>
                             </thead>
                             <tbody id="serialItemsTableBody">
                                 {% for item in transfer.items %}
                                 <tr>
-                                    <td class="text-center">
-                                        <span class="badge bg-secondary">{{ loop.index }}</span>
+                                    <td class="text-center align-middle">
+                                        <span class="badge bg-secondary fs-6">{{ loop.index }}</span>
                                     </td>
-                                    <td>
-                                        <code>{{ item.serial_number }}</code>
+                                    <td class="align-middle">
+                                        <code class="text-primary fw-bold">{{ item.serial_number }}</code>
+                                        {% if transfer.items|selectattr("serial_number", "equalto", item.serial_number)|list|length > 1 %}
+                                            <i class="fas fa-exclamation-triangle text-warning ms-1" title="Duplicate serial number"></i>
+                                        {% endif %}
                                     </td>
-                                    <td>{{ item.item_code }}</td>
-                                    <td>{{ item.item_description }}</td>
-                                    <td>
-                                        <span class="badge bg-info">{{ item.from_warehouse_code }}</span>
+                                    <td class="align-middle">
+                                        <span class="fw-semibold">{{ item.item_code }}</span>
                                     </td>
-                                    <td>
+                                    <td class="align-middle">
+                                        <small>{{ item.item_description }}</small>
+                                    </td>
+                                    <td class="align-middle">
+                                        <span class="badge bg-info text-dark">{{ item.from_warehouse_code }}</span>
+                                    </td>
+                                    <td class="align-middle">
                                         <span class="badge bg-success">{{ item.to_warehouse_code }}</span>
                                     </td>
-                                    <td>
+                                    <td class="align-middle">
                                         {% if item.validation_status == 'validated' %}
                                             <span class="badge bg-success">
                                                 <i class="fas fa-check"></i> Valid
@@ -220,25 +233,27 @@
                                                 <i class="fas fa-times"></i> Failed
                                             </span>
                                         {% else %}
-                                            <span class="badge bg-warning">
+                                            <span class="badge bg-warning text-dark">
                                                 <i class="fas fa-clock"></i> Pending
                                             </span>
                                         {% endif %}
                                     </td>
-                                    <td>{{ item.quantity }}</td>
+                                    <td class="text-center align-middle">{{ item.quantity }}</td>
                                     {% if transfer.status == 'draft' and (transfer.user_id == current_user.id or current_user.role in ['admin', 'manager']) %}
-                                    <td>
-                                        {% if item.validation_status == 'failed' %}
-                                            <button type="button" class="btn btn-sm btn-outline-warning" 
-                                                    onclick="revalidateItem({{ item.id }})"
-                                                    title="{{ item.validation_error }}">
-                                                <i class="fas fa-redo"></i> Retry
+                                    <td class="align-middle">
+                                        <div class="btn-group" role="group">
+                                            {% if item.validation_status == 'failed' %}
+                                                <button type="button" class="btn btn-sm btn-outline-warning" 
+                                                        onclick="revalidateItem({{ item.id }})"
+                                                        title="{{ item.validation_error }}">
+                                                    <i class="fas fa-redo"></i>
+                                                </button>
+                                            {% endif %}
+                                            <button type="button" class="btn btn-sm btn-outline-danger" 
+                                                    onclick="deleteItem({{ item.id }}, '{{ item.serial_number }}')">
+                                                <i class="fas fa-trash"></i>
                                             </button>
-                                        {% endif %}
-                                        <button type="button" class="btn btn-sm btn-outline-danger" 
-                                                onclick="deleteItem({{ item.id }}, '{{ item.serial_number }}')">
-                                            <i class="fas fa-trash"></i>
-                                        </button>
+                                        </div>
                                     </td>
                                     {% endif %}
                                 </tr>
@@ -246,6 +261,21 @@
                             </tbody>
                         </table>
                     </div>
+                    
+                    <!-- Duplicate Items Alert -->
+                    {% set duplicate_items = transfer.items|groupby('serial_number')|selectattr('1', 'length', '>', 1)|list %}
+                    {% if duplicate_items %}
+                    <div class="alert alert-warning mt-3">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <strong>Duplicate Serial Numbers Found:</strong>
+                        <ul class="mb-0 mt-2">
+                            {% for serial, items in duplicate_items %}
+                                <li><code>{{ serial }}</code> appears {{ items|length }} times</li>
+                            {% endfor %}
+                        </ul>
+                        <small class="d-block mt-2">Please review and delete unwanted duplicates before submitting.</small>
+                    </div>
+                    {% endif %}
                     
                     <!-- Summary -->
                     <div class="row mt-3">
