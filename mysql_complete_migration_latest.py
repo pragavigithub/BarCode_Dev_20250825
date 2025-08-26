@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 Complete MySQL Migration Script - Latest Version (August 2025)
-Includes all latest enhancements for Serial Number Transfers, QC Approval, and Performance optimizations
+Includes all latest enhancements for Serial Number Transfers, Serial Item Transfers, QC Approval, and Performance optimizations
 
 ENHANCEMENTS INCLUDED:
 ✅ Serial Number Transfer Module with duplicate prevention
+✅ Serial Item Transfer Module with SAP B1 validation (NEW - August 26, 2025)
 ✅ QC Approval workflow with proper status transitions
 ✅ Performance optimizations for 1000+ item validation
 ✅ Unique constraints to prevent data corruption
@@ -339,6 +340,102 @@ class MySQLMigration:
                     INDEX idx_serial_number (serial_number),
                     INDEX idx_is_validated (is_validated),
                     INDEX idx_internal_serial_number (internal_serial_number)
+                )
+            ''',
+            
+            # 13. Pick Lists (SAP B1 Compatible)
+            'pick_lists': '''
+                CREATE TABLE IF NOT EXISTS pick_lists (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    absolute_entry INT,
+                    name VARCHAR(50) NOT NULL,
+                    owner_code INT,
+                    owner_name VARCHAR(100),
+                    pick_date TIMESTAMP NULL,
+                    remarks TEXT,
+                    status VARCHAR(20) DEFAULT 'pending',
+                    object_type VARCHAR(10) DEFAULT '156',
+                    use_base_units VARCHAR(5) DEFAULT 'tNO',
+                    sales_order_number VARCHAR(20),
+                    pick_list_number VARCHAR(20),
+                    user_id INT NOT NULL,
+                    approver_id INT,
+                    priority VARCHAR(10) DEFAULT 'normal',
+                    warehouse_code VARCHAR(10),
+                    customer_code VARCHAR(20),
+                    customer_name VARCHAR(100),
+                    total_items INT DEFAULT 0,
+                    picked_items INT DEFAULT 0,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id),
+                    FOREIGN KEY (approver_id) REFERENCES users(id),
+                    INDEX idx_name (name),
+                    INDEX idx_status (status),
+                    INDEX idx_user_id (user_id),
+                    INDEX idx_absolute_entry (absolute_entry)
+                )
+            ''',
+            
+            # 14. Serial Item Transfers (New Module - Serial-driven transfers)
+            'serial_item_transfers': '''
+                CREATE TABLE IF NOT EXISTS serial_item_transfers (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    transfer_number VARCHAR(50) NOT NULL UNIQUE,
+                    sap_document_number VARCHAR(50),
+                    status VARCHAR(20) DEFAULT 'draft',
+                    user_id INT NOT NULL,
+                    qc_approver_id INT,
+                    qc_approved_at TIMESTAMP NULL,
+                    qc_notes TEXT,
+                    from_warehouse VARCHAR(10) NOT NULL,
+                    to_warehouse VARCHAR(10) NOT NULL,
+                    priority VARCHAR(10) DEFAULT 'normal',
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT,
+                    FOREIGN KEY (qc_approver_id) REFERENCES users(id) ON DELETE SET NULL,
+                    INDEX idx_transfer_number (transfer_number),
+                    INDEX idx_status (status),
+                    INDEX idx_user_id (user_id),
+                    INDEX idx_qc_approver_id (qc_approver_id),
+                    INDEX idx_from_warehouse (from_warehouse),
+                    INDEX idx_to_warehouse (to_warehouse),
+                    INDEX idx_priority (priority),
+                    INDEX idx_created_at (created_at)
+                )
+            ''',
+            
+            # 15. Serial Item Transfer Items (Auto-populated from SAP B1 validation)
+            'serial_item_transfer_items': '''
+                CREATE TABLE IF NOT EXISTS serial_item_transfer_items (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    serial_item_transfer_id INT NOT NULL,
+                    serial_number VARCHAR(100) NOT NULL,
+                    item_code VARCHAR(50) NOT NULL,
+                    item_description VARCHAR(200) NOT NULL,
+                    warehouse_code VARCHAR(10) NOT NULL,
+                    quantity INT DEFAULT 1,
+                    unit_of_measure VARCHAR(10) DEFAULT 'EA',
+                    from_warehouse_code VARCHAR(10) NOT NULL,
+                    to_warehouse_code VARCHAR(10) NOT NULL,
+                    qc_status VARCHAR(20) DEFAULT 'pending',
+                    validation_status VARCHAR(20) DEFAULT 'pending',
+                    validation_error TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    FOREIGN KEY (serial_item_transfer_id) REFERENCES serial_item_transfers(id) ON DELETE CASCADE,
+                    UNIQUE KEY unique_serial_per_transfer (serial_item_transfer_id, serial_number),
+                    INDEX idx_serial_item_transfer_id (serial_item_transfer_id),
+                    INDEX idx_serial_number (serial_number),
+                    INDEX idx_item_code (item_code),
+                    INDEX idx_warehouse_code (warehouse_code),
+                    INDEX idx_qc_status (qc_status),
+                    INDEX idx_validation_status (validation_status),
+                    INDEX idx_from_warehouse_code (from_warehouse_code),
+                    INDEX idx_to_warehouse_code (to_warehouse_code)
                 )
             ''',
             
