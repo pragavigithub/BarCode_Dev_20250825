@@ -15,6 +15,8 @@ Features included:
 - Quality Control Dashboard
 - Branch Management
 - Complete SAP B1 integration schemas
+- Batch Serial Number Validation (Performance Optimized for 1000+ serials)
+- PostgreSQL compatibility for Replit environment
 
 Run: python mysql_complete_migration_final.py
 """
