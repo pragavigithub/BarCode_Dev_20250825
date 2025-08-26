@@ -660,7 +660,31 @@ def post_to_sap(transfer_id):
         if not sap.ensure_logged_in():
             return jsonify({'success': False, 'error': 'SAP B1 connection failed'}), 500
         
-        sap_result = sap.post_stock_transfer(sap_transfer_data)
+        # Post directly to SAP B1 StockTransfers endpoint
+        try:
+            url = f"{sap.base_url}/b1s/v1/StockTransfers"
+            response = sap.session.post(url, json=sap_transfer_data, timeout=30)
+            
+            if response.status_code == 201:
+                sap_doc = response.json()
+                sap_result = {
+                    'success': True,
+                    'document_number': sap_doc.get('DocNum'),
+                    'doc_entry': sap_doc.get('DocEntry')
+                }
+            else:
+                error_text = response.text
+                logging.error(f"SAP B1 API error: {response.status_code} - {error_text}")
+                sap_result = {
+                    'success': False,
+                    'error': f'SAP B1 API error: {response.status_code} - {error_text}'
+                }
+        except Exception as api_error:
+            logging.error(f"SAP B1 connection error: {str(api_error)}")
+            sap_result = {
+                'success': False,
+                'error': f'SAP B1 connection error: {str(api_error)}'
+            }
         
         if sap_result.get('success'):
             # Update transfer status
