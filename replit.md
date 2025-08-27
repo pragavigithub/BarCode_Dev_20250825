@@ -83,6 +83,12 @@ A Flask-based warehouse management system with SAP integration for barcode scann
 - **Enhanced Duplicate Management**: Modified system to allow duplicate serial numbers to be added for individual user review and deletion
 - **Removed Unique Constraint**: Temporarily removed database unique constraint to enable user management of duplicate serial numbers
 - **Improved User Control**: Users can now see all duplicate entries in serial numbers modal and selectively delete unwanted duplicates
+- **2025-08-27**: Real-time Serial Validation Enhancement for Serial Transfer Module
+- **Progressive Validation UI**: Implemented real-time serial number validation with progressive UI updates to prevent SAP timeout issues
+- **Warehouse Validation**: Added validation to ensure From/To warehouses must be different when creating serial transfers
+- **SAP API Integration**: Updated to use specific SAP B1 API endpoint (SQLQueries('Item_Validation')/List) for enhanced serial validation
+- **Real-time Progress Tracking**: Added validation progress bar and real-time status updates during serial validation process
+- **Enhanced User Experience**: Serial numbers are validated one-by-one with immediate UI feedback, preventing timeouts and providing clear status
 - **2025-08-26**: Serial Item Transfer Module Implementation
 - **New Module Created**: Built completely separate Serial Item Transfer module with models (SerialItemTransfer, SerialItemTransferItem)
 - **SAP B1 Integration**: Integrated specific SAP B1 API endpoint (https://192.168.0.126:50000/b1s/v1/SQLQueries('Item_Validation')/List) for serial number validation

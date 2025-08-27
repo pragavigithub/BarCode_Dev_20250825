@@ -370,11 +370,26 @@ Serial Number Transfer {{ transfer.transfer_number }}
                         </div>
                     </div>
                     
-                    <div id="validationResults" style="display: none;"></div>
+                    <!-- Real-time Validation Results -->
+                    <div id="validationResults" style="display: none;">
+                        <div class="mb-3">
+                            <label class="form-label">Real-time Validation Progress</label>
+                            <div class="progress mb-2">
+                                <div id="validationProgressBar" class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+                            </div>
+                            <small class="text-muted" id="validationStatus">Ready to validate</small>
+                        </div>
+                        <div id="validationResultsTable" style="max-height: 300px; overflow-y: auto;">
+                            <!-- Validation results will appear here -->
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">
+                    <button type="button" class="btn btn-warning" id="validateSerials" onclick="startRealTimeValidation()" style="display: none;">
+                        <i data-feather="check-circle"></i> Start Validation
+                    </button>
+                    <button type="submit" class="btn btn-primary" id="addItemBtn">
                         <i data-feather="plus"></i> Add Item & Validate Serials
                     </button>
                 </div>
@@ -492,6 +507,7 @@ function updateQuantityInfo() {
     const statusMessage = document.getElementById('serialCountMessage');
     const quantityWarning = document.getElementById('quantityMismatchWarning');
     const quantityMessage = document.getElementById('quantityMismatchMessage');
+    const validateBtn = document.getElementById('validateSerials');
     
     const expectedQuantity = parseInt(quantityInput.value) || 0;
     const serialNumbers = parseSerialNumbers(serialsTextarea.value);
@@ -502,6 +518,7 @@ function updateQuantityInfo() {
         statusBadge.textContent = 'Enter quantity first';
         statusMessage.textContent = 'Only valid serial numbers will count towards quantity';
         quantityWarning.style.display = 'none';
+        validateBtn.style.display = 'none';
         return;
     }
     
@@ -510,14 +527,16 @@ function updateQuantityInfo() {
         statusBadge.textContent = `0/${expectedQuantity} serial numbers`;
         statusMessage.textContent = 'Enter serial numbers - only valid ones will count';
         quantityWarning.style.display = 'none';
+        validateBtn.style.display = 'none';
         return;
     }
     
-    // Show total count but indicate validation is needed
+    // Show total count and enable validation button
     statusBadge.className = 'badge bg-info';
     statusBadge.textContent = `${totalCount} entered - Validation needed`;
     statusMessage.textContent = `Only ${expectedQuantity} valid serial numbers required for quantity match`;
     quantityWarning.style.display = 'none';
+    validateBtn.style.display = 'inline-block';
     
     // Refresh feather icons if needed
     if (typeof feather !== 'undefined') {
@@ -1102,6 +1121,275 @@ Enter serial numbers (one per line or separated by commas):`);
         console.error('Error:', error);
         alert('❌ Error adding serial numbers');
     });
+}
+
+// Real-time Serial Validation Functions
+let validationState = {
+    serialNumbers: [],
+    currentIndex: 0,
+    validCount: 0,
+    invalidCount: 0,
+    isValidating: false,
+    results: []
+};
+
+function startRealTimeValidation() {
+    const itemCode = document.getElementById('item_code').value.trim();
+    const serialsTextarea = document.getElementById('serial_numbers');
+    const fromWarehouse = '{{ transfer.from_warehouse }}';
+    const toWarehouse = '{{ transfer.to_warehouse }}';
+    
+    if (!itemCode) {
+        alert('Please enter Item Code first');
+        return;
+    }
+    
+    // Parse serial numbers
+    const serialNumbers = parseSerialNumbers(serialsTextarea.value);
+    if (serialNumbers.length === 0) {
+        alert('Please enter serial numbers first');
+        return;
+    }
+    
+    // Initialize validation state
+    validationState = {
+        serialNumbers: serialNumbers,
+        currentIndex: 0,
+        validCount: 0,
+        invalidCount: 0,
+        isValidating: true,
+        results: []
+    };
+    
+    // Show validation UI
+    document.getElementById('validationResults').style.display = 'block';
+    document.getElementById('validateSerials').disabled = true;
+    document.getElementById('addItemBtn').disabled = true;
+    
+    // Create results table
+    initializeValidationTable();
+    
+    // Start validation
+    validateNextSerial(itemCode, fromWarehouse);
+}
+
+function initializeValidationTable() {
+    const tableContainer = document.getElementById('validationResultsTable');
+    tableContainer.innerHTML = `
+        <table class="table table-sm table-bordered">
+            <thead class="table-light">
+                <tr>
+                    <th width="30%">Serial Number</th>
+                    <th width="20%">Status</th>
+                    <th width="25%">Item Code</th>
+                    <th width="25%">Warehouse</th>
+                </tr>
+            </thead>
+            <tbody id="validationTableBody">
+            </tbody>
+        </table>
+    `;
+}
+
+function validateNextSerial(itemCode, fromWarehouse) {
+    const { serialNumbers, currentIndex } = validationState;
+    
+    if (currentIndex >= serialNumbers.length) {
+        // Validation complete
+        onValidationComplete();
+        return;
+    }
+    
+    const currentSerial = serialNumbers[currentIndex];
+    const progress = ((currentIndex + 1) / serialNumbers.length) * 100;
+    
+    // Update progress
+    updateProgress(progress, `Validating ${currentSerial}... (${currentIndex + 1}/${serialNumbers.length})`);
+    
+    // Add row to table with "Validating..." status
+    addValidationRow(currentSerial, 'Validating...', '', '');
+    
+    // Create validation payload
+    const validationData = {
+        series: currentSerial,
+        whsCode: fromWarehouse,
+        itemCode: itemCode
+    };
+    
+    // Make API call to SAP B1 validation endpoint
+    fetch('/inventory_transfer/validate_serial_realtime', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(validationData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        // Update the validation result
+        const isValid = data.valid || false;
+        const itemCodeResult = data.item_code || '';
+        const warehouseResult = data.warehouse_code || '';
+        const error = data.error || '';
+        
+        // Update the row
+        updateValidationRow(currentIndex, currentSerial, isValid, itemCodeResult, warehouseResult, error);
+        
+        // Update counters
+        if (isValid) {
+            validationState.validCount++;
+        } else {
+            validationState.invalidCount++;
+        }
+        
+        // Store result
+        validationState.results.push({
+            serial: currentSerial,
+            valid: isValid,
+            itemCode: itemCodeResult,
+            warehouse: warehouseResult,
+            error: error
+        });
+        
+        // Move to next serial
+        validationState.currentIndex++;
+        
+        // Continue with next serial after a small delay to avoid overwhelming SAP
+        setTimeout(() => {
+            validateNextSerial(itemCode, fromWarehouse);
+        }, 500);
+    })
+    .catch(error => {
+        console.error('Validation error:', error);
+        
+        // Update row with error
+        updateValidationRow(currentIndex, currentSerial, false, '', '', 'Validation failed: ' + error.message);
+        validationState.invalidCount++;
+        validationState.currentIndex++;
+        
+        // Continue with next serial
+        setTimeout(() => {
+            validateNextSerial(itemCode, fromWarehouse);
+        }, 500);
+    });
+}
+
+function addValidationRow(serial, status, itemCode, warehouse) {
+    const tableBody = document.getElementById('validationTableBody');
+    const row = document.createElement('tr');
+    row.id = `validation-row-${validationState.currentIndex}`;
+    
+    let statusBadge = '';
+    if (status === 'Validating...') {
+        statusBadge = '<span class="badge bg-info"><span class="spinner-border spinner-border-sm me-1"></span>Validating...</span>';
+    }
+    
+    row.innerHTML = `
+        <td><code>${serial}</code></td>
+        <td>${statusBadge}</td>
+        <td>${itemCode}</td>
+        <td>${warehouse}</td>
+    `;
+    
+    tableBody.appendChild(row);
+    
+    // Scroll to the latest row
+    row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function updateValidationRow(index, serial, isValid, itemCode, warehouse, error) {
+    const row = document.getElementById(`validation-row-${index}`);
+    if (!row) return;
+    
+    let statusBadge = '';
+    let rowClass = '';
+    
+    if (isValid) {
+        statusBadge = '<span class="badge bg-success">✓ Valid</span>';
+        rowClass = 'table-success';
+    } else {
+        statusBadge = '<span class="badge bg-danger">✗ Invalid</span>';
+        rowClass = 'table-danger';
+        if (error) {
+            statusBadge += `<br><small class="text-muted">${error}</small>`;
+        }
+    }
+    
+    row.className = rowClass;
+    row.innerHTML = `
+        <td><code>${serial}</code></td>
+        <td>${statusBadge}</td>
+        <td>${itemCode}</td>
+        <td>${warehouse}</td>
+    `;
+}
+
+function updateProgress(percentage, status) {
+    const progressBar = document.getElementById('validationProgressBar');
+    const statusText = document.getElementById('validationStatus');
+    
+    progressBar.style.width = percentage + '%';
+    progressBar.textContent = Math.round(percentage) + '%';
+    statusText.textContent = status;
+    
+    if (percentage < 50) {
+        progressBar.className = 'progress-bar bg-info';
+    } else if (percentage < 100) {
+        progressBar.className = 'progress-bar bg-warning';
+    } else {
+        progressBar.className = 'progress-bar bg-success';
+    }
+}
+
+function onValidationComplete() {
+    const { validCount, invalidCount, serialNumbers } = validationState;
+    const total = serialNumbers.length;
+    const expectedQuantity = parseInt(document.getElementById('quantity').value) || 0;
+    
+    validationState.isValidating = false;
+    
+    // Update progress to complete
+    updateProgress(100, `Validation Complete: ${validCount} valid, ${invalidCount} invalid out of ${total} serial numbers`);
+    
+    // Update status badge
+    const statusBadge = document.getElementById('serialCountStatus');
+    const statusMessage = document.getElementById('serialCountMessage');
+    
+    if (validCount === expectedQuantity) {
+        statusBadge.className = 'badge bg-success';
+        statusBadge.textContent = `Perfect Match: ${validCount}/${expectedQuantity}`;
+        statusMessage.textContent = 'Quantity matches! Ready to add item.';
+    } else if (validCount > expectedQuantity) {
+        statusBadge.className = 'badge bg-warning';
+        statusBadge.textContent = `Excess: ${validCount}/${expectedQuantity}`;
+        statusMessage.textContent = `${validCount - expectedQuantity} extra valid serial(s). Remove extras before adding item.`;
+    } else {
+        statusBadge.className = 'badge bg-danger';
+        statusBadge.textContent = `Shortage: ${validCount}/${expectedQuantity}`;
+        statusMessage.textContent = `Need ${expectedQuantity - validCount} more valid serial(s).`;
+    }
+    
+    // Re-enable buttons
+    document.getElementById('validateSerials').disabled = false;
+    document.getElementById('addItemBtn').disabled = false;
+    
+    // Show summary alert
+    const summaryMessage = `Validation Complete!
+    
+✓ Valid Serial Numbers: ${validCount}
+✗ Invalid Serial Numbers: ${invalidCount}
+📦 Expected Quantity: ${expectedQuantity}
+
+${validCount === expectedQuantity ? '✅ Perfect match! Ready to add item.' : 
+  validCount > expectedQuantity ? `⚠️ Remove ${validCount - expectedQuantity} extra serial(s) before adding.` :
+  `❌ Add ${expectedQuantity - validCount} more valid serial(s) before adding.`}`;
+  
+    alert(summaryMessage);
+    
+    // Refresh feather icons
+    if (typeof feather !== 'undefined') {
+        feather.replace();
+    }
 }
 
 // Initialize Feather icons on page load

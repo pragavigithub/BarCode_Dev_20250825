@@ -1961,3 +1961,50 @@ def revalidate_serial_number(serial_id):
         db.session.rollback()
         logging.error(f"Error re-validating serial number: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@transfer_bp.route('/validate_serial_realtime', methods=['POST'])
+@login_required
+def validate_serial_realtime():
+    """Real-time serial number validation endpoint for progressive UI updates"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        series = data.get('series', '').strip()
+        whsCode = data.get('whsCode', '').strip()  
+        itemCode = data.get('itemCode', '').strip()
+        
+        if not all([series, whsCode, itemCode]):
+            return jsonify({
+                'valid': False,
+                'error': 'Missing required parameters: series, whsCode, or itemCode'
+            }), 400
+        
+        # Use the new SAP validation method
+        from sap_integration import SAPIntegration
+        sap = SAPIntegration()
+        
+        validation_result = sap.validate_serial_for_transfer(series, whsCode, itemCode)
+        
+        # Return standardized response for frontend
+        response = {
+            'valid': validation_result.get('valid', False),
+            'item_code': validation_result.get('item_code', ''),
+            'warehouse_code': validation_result.get('warehouse_code', ''),
+            'dist_number': validation_result.get('dist_number', ''),
+            'source': validation_result.get('source', ''),
+            'error': validation_result.get('error', '')
+        }
+        
+        logging.info(f"🔍 Real-time validation for {series} in {whsCode}: Valid={response['valid']}")
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logging.error(f"Error in real-time serial validation: {str(e)}")
+        return jsonify({
+            'valid': False,
+            'error': f'Validation error: {str(e)}'
+        }), 500
