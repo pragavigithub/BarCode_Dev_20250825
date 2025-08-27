@@ -630,6 +630,11 @@ def serial_create():
             flash('From Warehouse and To Warehouse are required', 'error')
             return render_template('serial_create_transfer.html')
         
+        # Validate that from_warehouse and to_warehouse are different
+        if from_warehouse == to_warehouse:
+            flash('From Warehouse and To Warehouse must be different', 'error')
+            return render_template('serial_create_transfer.html')
+        
         # Create new transfer with auto-generated number
         transfer = SerialNumberTransfer(
             transfer_number=transfer_number,
@@ -719,7 +724,7 @@ def serial_add_item_ultra_batch(transfer_id):
         transfer_item = SerialNumberTransferItem()
         transfer_item.serial_transfer_id = transfer.id
         transfer_item.item_code = item_code
-        transfer_item.item_description = item_name
+        transfer_item.item_name = item_name
         transfer_item.quantity = expected_quantity
         transfer_item.from_warehouse_code = transfer.from_warehouse
         transfer_item.to_warehouse_code = transfer.to_warehouse
@@ -1514,15 +1519,18 @@ def serial_add_more_serials(item_id):
         if not new_serials:
             return jsonify({'success': False, 'error': 'No new serial numbers to add'}), 400
         
-        # Validate against SAP B1 and add serials
+        # Validate against SAP B1 and add serials using the new validation method
         validated_count = 0
+        from sap_integration import SAPIntegration
+        sap = SAPIntegration()
+        
         for serial_number in new_serials:
-            validation_result = validate_series_with_warehouse_sap(serial_number, item.item_code, transfer.from_warehouse)
+            validation_result = sap.validate_serial_for_transfer(serial_number, transfer.from_warehouse, item.item_code)
             
             serial_record = SerialNumberTransferSerial()
             serial_record.transfer_item_id = item.id
             serial_record.serial_number = serial_number
-            serial_record.internal_serial_number = validation_result.get('SerialNumber') or validation_result.get('DistNumber', serial_number)
+            serial_record.internal_serial_number = validation_result.get('dist_number', serial_number)
             serial_record.system_serial_number = validation_result.get('SystemNumber')
             serial_record.is_validated = validation_result.get('valid', False)
             serial_record.validation_error = validation_result.get('error') or validation_result.get('warning')
@@ -1920,17 +1928,19 @@ def revalidate_serial_number(serial_id):
         if transfer.status not in ['draft', 'submitted']:
             return jsonify({'success': False, 'error': 'Can only validate serial numbers in draft or submitted transfers'}), 400
         
-        # Re-validate the serial number
-        validation_result = validate_series_with_warehouse_sap(
+        # Re-validate the serial number using the new validation method
+        from sap_integration import SAPIntegration
+        sap = SAPIntegration()
+        validation_result = sap.validate_serial_for_transfer(
             serial_record.serial_number, 
-            transfer_item.item_code, 
-            transfer.from_warehouse
+            transfer.from_warehouse,
+            transfer_item.item_code
         )
         
         # Update validation status
         serial_record.is_validated = validation_result.get('valid', False)
         serial_record.validation_error = validation_result.get('error') if not validation_result.get('valid') else validation_result.get('warning')
-        serial_record.system_serial_number = validation_result.get('SystemNumber') or validation_result.get('SerialNumber')
+        serial_record.system_serial_number = validation_result.get('SystemNumber') or validation_result.get('dist_number')
         serial_record.updated_at = datetime.utcnow()
         
         db.session.commit()
@@ -1942,9 +1952,9 @@ def revalidate_serial_number(serial_id):
             'message': f'Serial number {serial_record.serial_number} re-validated',
             'is_validated': serial_record.is_validated,
             'validation_error': serial_record.validation_error,
-            'available_in_warehouse': validation_result.get('available_in_warehouse', False),
-            'warehouse_code': validation_result.get('WhsCode'),
-            'validation_type': validation_result.get('validation_type', 'unknown')
+            'available_in_warehouse': validation_result.get('valid', False),
+            'warehouse_code': validation_result.get('warehouse_code'),
+            'validation_type': validation_result.get('source', 'unknown')
         })
         
     except Exception as e:
