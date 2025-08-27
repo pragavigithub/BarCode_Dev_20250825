@@ -3262,17 +3262,27 @@ class SAPIntegration:
             logging.error(error_msg)
             return {'success': False, 'error': error_msg}
 
-    def validate_serial_item_for_transfer(self, serial_number, warehouse_code):
+    def validate_serial_item_for_transfer(self, serial_number, warehouse_code, item_code=None):
         """
         Validate serial number and get item details using SAP B1 SQL Query for Serial Item Transfer
         Uses the specific API endpoint: SQLQueries('Item_Validation')/List
+        
+        Args:
+            serial_number: Serial number to validate (e.g., 'RLM500')
+            warehouse_code: Warehouse code (e.g., '7000-FG') 
+            item_code: Item code for validation (e.g., 'RedmiNote4') - optional, auto-detected if not provided
+        
+        API Specification:
+        URL: https://192.168.1.5:50000/b1s/v1/SQLQueries('Item_Validation')/List
+        Method: POST
+        Body: {"ParamList": "seriel_number='RLM500'&whcode='7000-FG'&itemCode='RedmiNote4'"}
         """
         try:
             if not self.ensure_logged_in():
                 logging.warning("SAP B1 not available, returning mock validation for Serial Item Transfer")
                 return {
                     'valid': True,
-                    'item_code': 'MOCK-ITEM',
+                    'item_code': item_code or 'MOCK-ITEM',
                     'item_description': f'Mock Item for {serial_number}',
                     'warehouse_code': warehouse_code,
                     'dist_number': serial_number,
@@ -3282,12 +3292,19 @@ class SAPIntegration:
             # SAP B1 SQL Query API endpoint as specified
             url = f"{self.base_url}/b1s/v1/SQLQueries('Item_Validation')/List"
             
-            # Request body with parameters as specified
-            request_body = {
-                "ParamList": f"seriel_number='{serial_number}'&whcode='{warehouse_code}'"
-            }
+            # If item_code is not provided, try to get it from first validation call
+            if not item_code:
+                # First call without item_code to get it
+                request_body = {
+                    "ParamList": f"seriel_number='{serial_number}'&whcode='{warehouse_code}'"
+                }
+            else:
+                # Full validation with all parameters as specified
+                request_body = {
+                    "ParamList": f"seriel_number='{serial_number}'&whcode='{warehouse_code}'&itemCode='{item_code}'"
+                }
             
-            logging.info(f"🔍 Validating serial {serial_number} in warehouse {warehouse_code} via SAP B1 SQL Query")
+            logging.info(f"🔍 Validating serial {serial_number} in warehouse {warehouse_code} with itemCode {item_code} via SAP B1 SQL Query")
             logging.info(f"📡 Request URL: {url}")
             logging.info(f"📦 Request Body: {request_body}")
             
@@ -3303,19 +3320,24 @@ class SAPIntegration:
                 if values and len(values) > 0:
                     # Get the first matching result
                     result = values[0]
-                    item_code = result.get('ItemCode', '')
+                    result_item_code = result.get('ItemCode', '')
                     dist_number = result.get('DistNumber', '')
                     whs_code = result.get('WhsCode', '')
                     
                     # For item description, we'll need to make another call to get item details
-                    item_description = self._get_item_description(item_code)
+                    item_description = self._get_item_description(result_item_code)
+                    
+                    # If we didn't have item_code and now we do, make a second validation with the complete parameters
+                    if not item_code and result_item_code:
+                        logging.info(f"🔄 Re-validating with discovered item code: {result_item_code}")
+                        return self.validate_serial_item_for_transfer(serial_number, warehouse_code, result_item_code)
                     
                     logging.info(f"✅ Serial number {serial_number} validated successfully")
-                    logging.info(f"📋 Item Code: {item_code}, Warehouse: {whs_code}")
+                    logging.info(f"📋 Item Code: {result_item_code}, Warehouse: {whs_code}")
                     
                     return {
                         'valid': True,
-                        'item_code': item_code,
+                        'item_code': result_item_code,
                         'item_description': item_description,
                         'warehouse_code': whs_code,
                         'dist_number': dist_number,
@@ -3324,10 +3346,15 @@ class SAPIntegration:
                     }
                 else:
                     # No results found
-                    logging.warning(f"❌ Serial number {serial_number} not found in warehouse {warehouse_code}")
+                    error_msg = f'Serial number {serial_number} not found in warehouse {warehouse_code}'
+                    if item_code:
+                        error_msg += f' for item {item_code}'
+                    error_msg += ' or quantity is 0'
+                    
+                    logging.warning(f"❌ {error_msg}")
                     return {
                         'valid': False,
-                        'error': f'Serial number {serial_number} not found in warehouse {warehouse_code} or quantity is 0',
+                        'error': error_msg,
                         'source': 'sap_b1'
                     }
             else:

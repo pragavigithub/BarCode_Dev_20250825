@@ -378,7 +378,7 @@ class MySQLMigration:
                 )
             ''',
             
-            # 14. Serial Item Transfers (New Module - Serial-driven transfers)
+            # 14. Serial Item Transfers (New Module - Serial-driven transfers with warehouse validation)
             'serial_item_transfers': '''
                 CREATE TABLE IF NOT EXISTS serial_item_transfers (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -404,11 +404,12 @@ class MySQLMigration:
                     INDEX idx_from_warehouse (from_warehouse),
                     INDEX idx_to_warehouse (to_warehouse),
                     INDEX idx_priority (priority),
-                    INDEX idx_created_at (created_at)
+                    INDEX idx_created_at (created_at),
+                    CONSTRAINT chk_warehouses_different CHECK (from_warehouse != to_warehouse)
                 )
             ''',
             
-            # 15. Serial Item Transfer Items (Auto-populated from SAP B1 validation)
+            # 15. Serial Item Transfer Items (Auto-populated from SAP B1 validation with enhanced warehouse validation)
             'serial_item_transfer_items': '''
                 CREATE TABLE IF NOT EXISTS serial_item_transfer_items (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -424,6 +425,7 @@ class MySQLMigration:
                     qc_status VARCHAR(20) DEFAULT 'pending',
                     validation_status VARCHAR(20) DEFAULT 'pending',
                     validation_error TEXT,
+                    sap_validation_data JSON,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     FOREIGN KEY (serial_item_transfer_id) REFERENCES serial_item_transfers(id) ON DELETE CASCADE,
@@ -435,7 +437,8 @@ class MySQLMigration:
                     INDEX idx_qc_status (qc_status),
                     INDEX idx_validation_status (validation_status),
                     INDEX idx_from_warehouse_code (from_warehouse_code),
-                    INDEX idx_to_warehouse_code (to_warehouse_code)
+                    INDEX idx_to_warehouse_code (to_warehouse_code),
+                    CONSTRAINT chk_serial_warehouse_different CHECK (from_warehouse_code != to_warehouse_code)
                 )
             ''',
             
